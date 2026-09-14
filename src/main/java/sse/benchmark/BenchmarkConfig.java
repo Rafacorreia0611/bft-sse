@@ -18,21 +18,24 @@ public final class BenchmarkConfig {
     private final int measurementIterations;
     private final String outputPath;
     private final String inputPath;
+    private final String vocabularyPath;
     private final List<BenchmarkBucket> buckets;
 
-    public BenchmarkConfig(String scenarioName,
-                           int clientId,
-                           int warmupIterations,
-                           int measurementIterations,
-                           String outputPath,
-                           String inputPath,
-                           List<BenchmarkBucket> buckets) {
+    private BenchmarkConfig(String scenarioName,
+                            int clientId,
+                            int warmupIterations,
+                            int measurementIterations,
+                            String outputPath,
+                            String inputPath,
+                            String vocabularyPath,
+                            List<BenchmarkBucket> buckets) {
         this.scenarioName = scenarioName;
         this.clientId = clientId;
         this.warmupIterations = warmupIterations;
         this.measurementIterations = measurementIterations;
         this.outputPath = outputPath;
         this.inputPath = inputPath;
+        this.vocabularyPath = vocabularyPath;
         this.buckets = new ArrayList<BenchmarkBucket>(buckets);
     }
 
@@ -60,6 +63,10 @@ public final class BenchmarkConfig {
         return inputPath;
     }
 
+    public String vocabularyPath() {
+        return vocabularyPath;
+    }
+
     public List<BenchmarkBucket> buckets() {
         return new ArrayList<BenchmarkBucket>(buckets);
     }
@@ -77,6 +84,10 @@ public final class BenchmarkConfig {
         if ("search-latency-by-docs".equals(scenarioName)) {
             int warmupIterations = parseNonNegativeInt(properties, "warmupPerBucket");
             int measurementIterations = parsePositiveInt(properties, "measurementsPerBucket");
+            String vocabularyPath = resolvePath(
+                    configDirectory,
+                    requireProperty(properties, "vocabularyPath")
+            );
             List<BenchmarkBucket> buckets = parseBuckets(requireProperty(properties, "buckets"));
 
             return new BenchmarkConfig(
@@ -86,6 +97,7 @@ public final class BenchmarkConfig {
                     measurementIterations,
                     outputPath,
                     inputPath,
+                    vocabularyPath,
                     buckets
             );
         }
@@ -100,6 +112,7 @@ public final class BenchmarkConfig {
                     1,
                     outputPath,
                     inputPath,
+                    null,
                     Collections.<BenchmarkBucket>emptyList()
             );
         }
@@ -204,9 +217,6 @@ public final class BenchmarkConfig {
             buckets.add(bucket);
         }
 
-        if (buckets.isEmpty()) {
-            throw new IllegalArgumentException("At least one benchmark bucket must be configured");
-        }
         return buckets;
     }
 

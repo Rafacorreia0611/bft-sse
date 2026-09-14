@@ -108,6 +108,7 @@ load_config() {
   BENCHMARK_CLIENT_DIR="$(get_property benchmarkClientDir)"
   SCENARIO="$(get_property scenario)"
   CLIENT_ID="$(get_property clientId)"
+  VOCABULARY_PATH="$(get_property vocabularyPath)"
   WARMUP_PER_BUCKET="$(get_property warmupPerBucket)"
   MEASUREMENTS_PER_BUCKET="$(get_property measurementsPerBucket)"
   TIMESTAMP_OUTPUTS="$(get_property timestampOutputs)"
@@ -139,10 +140,12 @@ load_config() {
   calculate_fault_count
   EXPECTED_SAMPLES_PER_BUCKET=$((WARMUP_PER_BUCKET + MEASUREMENTS_PER_BUCKET))
   ABS_DATASET_PATH="$(resolve_config_path "$INPUT_PATH")"
+  ABS_VOCABULARY_PATH="$(resolve_config_path "$VOCABULARY_PATH")"
   BASE_OUTPUT_PATH="$(resolve_config_path "$OUTPUT_PATH")"
   BASE_SUMMARY_PATH="$(resolve_config_path "$SUMMARY_OUTPUT_PATH")"
   BASE_MEAN_PLOT_PATH="$(resolve_config_path "$MEAN_PLOT_OUTPUT_PATH")"
   BASE_MEDIAN_PLOT_PATH="$(resolve_config_path "$MEDIAN_PLOT_OUTPUT_PATH")"
+  [[ -s "$ABS_VOCABULARY_PATH" ]] || die "Vocabulary file is missing or empty: $ABS_VOCABULARY_PATH"
 
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
     RUN_DATE="$(date +%d_%m_%Y)"
@@ -224,7 +227,7 @@ generate_dataset() {
       echo "Generating synthetic dataset..."
       python3 "$ROOT_DIR/benchmarkSSE/scripts/datasets/syntheticDataset.py" \
         --output "$ABS_SYNTHETIC_OUTPUT_PATH" \
-        --vocabulary "$ROOT_DIR/datasets/vocabulary/vocabulary.txt" \
+        --vocabulary "$ABS_VOCABULARY_PATH" \
         --keywords-per-doc-count "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" \
         --doc-counts "$SYNTHETIC_DOC_COUNTS" \
         --seed "$SYNTHETIC_SEED"
@@ -237,6 +240,7 @@ generate_dataset() {
 write_local_runtime_config() {
   local remote_dataset_path="$1"
   local remote_output_path="$2"
+  local remote_vocabulary_path="$3"
   local wrote_buckets=0
 
   {
@@ -248,6 +252,7 @@ write_local_runtime_config() {
       case "$line" in
         inputPath=*) printf 'inputPath=%s\n' "$remote_dataset_path" ;;
         outputPath=*) printf 'outputPath=%s\n' "$remote_output_path" ;;
+        vocabularyPath=*) printf 'vocabularyPath=%s\n' "$remote_vocabulary_path" ;;
         replicaCount=*) printf 'replicaCount=%s\n' "$REPLICA_COUNT" ;;
         buckets=*)
           printf 'buckets=%s\n' "$BUCKETS"
@@ -263,20 +268,22 @@ write_local_runtime_config() {
 }
 
 copy_benchmark_inputs() {
-  local populate_host benchmark_host remote_base remote_dataset_path remote_runtime_path remote_output_path
+  local populate_host benchmark_host remote_base
 
   populate_host="$(client_node "$POPULATE_CLIENT_INDEX")"
   benchmark_host="$(client_node "$BENCHMARK_CLIENT_INDEX")"
   remote_base="$(remote_run_dir)/benchmark"
   REMOTE_DATASET_PATH="$remote_base/input/$(basename "$ABS_DATASET_PATH")"
+  REMOTE_VOCABULARY_PATH="$remote_base/input/$(basename "$ABS_VOCABULARY_PATH")"
   REMOTE_RUNTIME_CONFIG_PATH="$remote_base/runtime_search_latency_by_docs.properties"
   REMOTE_OUTPUT_PATH="$remote_base/results/search_latency_by_docs.csv"
 
-  write_local_runtime_config "$REMOTE_DATASET_PATH" "$REMOTE_OUTPUT_PATH"
+  write_local_runtime_config "$REMOTE_DATASET_PATH" "$REMOTE_OUTPUT_PATH" "$REMOTE_VOCABULARY_PATH"
 
   for host in "$populate_host" "$benchmark_host"; do
     ssh_remote "$host" "mkdir -p '$remote_base/input' '$remote_base/results' '$remote_base/logs'"
     scp_remote "$ABS_DATASET_PATH" "$host:$REMOTE_DATASET_PATH"
+    scp_remote "$ABS_VOCABULARY_PATH" "$host:$REMOTE_VOCABULARY_PATH"
   done
   scp_remote "$LOCAL_RUNTIME_CONFIG_PATH" "$benchmark_host:$REMOTE_RUNTIME_CONFIG_PATH"
 }
@@ -285,7 +292,7 @@ run_populate_remote() {
   local host
   host="$(client_node "$POPULATE_CLIENT_INDEX")"
   echo "Running PopulateDB on $host..."
-  ssh_remote "$host" "cd '$(remote_run_dir)/$POPULATE_CLIENT_DIR' && env JAVA_OPTS='$QUINTA_CLIENT_JAVA_OPTS' bash smartrun.sh sse.populatedb.PopulateDB --client-id '$POPULATE_CLIENT_ID' --input '$REMOTE_DATASET_PATH' --batch-size '$POPULATE_BATCH_SIZE'" \
+  ssh_remote "$host" "cd '$(remote_run_dir)/$POPULATE_CLIENT_DIR' && env JAVA_OPTS='$QUINTA_CLIENT_JAVA_OPTS' bash smartrun.sh sse.populatedb.PopulateDB --client-id '$POPULATE_CLIENT_ID' --input '$REMOTE_DATASET_PATH' --batch-size '$POPULATE_BATCH_SIZE' --vocabulary '$REMOTE_VOCABULARY_PATH'" \
     > "$ABS_LOG_DIR/populate.log" 2>&1
   grep -q "PopulateDB finished." "$ABS_LOG_DIR/populate.log" || {
     tail -n 40 "$ABS_LOG_DIR/populate.log" >&2 || true

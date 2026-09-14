@@ -15,6 +15,7 @@ import sse.domain.search.SearchToken;
 import sse.domain.state.KeywordBlock;
 import sse.domain.state.State;
 import sse.facade.SSEClientFacade;
+import sse.metrics.SearchOperationMetrics;
 import sse.oram.ORAMAdapter;
 import sse.oram.ORAMSettings;
 import sse.vocabulary.VocabularyLoader;
@@ -61,30 +62,78 @@ public final class SSEClientHandler {
     }
 
     public List<String> search(String keyword) {
+        return searchInternal(keyword, null);
+    }
+
+    public List<String> search(String keyword, SearchOperationMetrics metrics) {
+        if (metrics == null) {
+            throw new IllegalArgumentException("metrics cannot be null");
+        }
+        return searchInternal(keyword, metrics);
+    }
+
+    private List<String> searchInternal(String keyword, SearchOperationMetrics metrics) {
+        long phaseStart = startTiming(metrics);
         String normalizedKeyword = sseClientFacade.normalizeKeyword(keyword);
+        if (metrics != null) {
+            metrics.recordNormalizationLatency(System.nanoTime() - phaseStart);
+        }
         if (normalizedKeyword == null || normalizedKeyword.isEmpty()) {
             throw new IllegalArgumentException("keyword cannot be normalized: " + keyword);
         }
 
+        phaseStart = startTiming(metrics);
         ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
         State state = stateRequest.state();
         SecretKey masterKey = stateRequest.masterKey();
+        if (metrics != null) {
+            metrics.recordStateRequestLatency(System.nanoTime() - phaseStart);
+        }
+
+        phaseStart = startTiming(metrics);
         Integer keywordLocation = sseClientFacade.resolveKeywordLocation(masterKey, state, normalizedKeyword);
+        if (metrics != null) {
+            metrics.recordAddressResolutionLatency(System.nanoTime() - phaseStart);
+        }
         if (keywordLocation == null) {
             throw new IllegalArgumentException("keyword is outside the vocabulary: " + keyword);
         }
 
+        phaseStart = startTiming(metrics);
         KeywordBlock keywordBlock = oramAdapter.readKeywordBlock(keywordLocation);
+        if (metrics != null) {
+            metrics.recordOramReadLatency(System.nanoTime() - phaseStart);
+        }
+
+        phaseStart = startTiming(metrics);
         SearchToken searchToken = sseClientFacade.generateSearchToken(
                 masterKey,
                 keywordBlock.keywordState(),
                 normalizedKeyword
         );
+        if (metrics != null) {
+            metrics.recordTokenBuildLatency(System.nanoTime() - phaseStart);
+        }
         if (searchToken == null) {
             return Collections.emptyList();
         }
+
+        phaseStart = startTiming(metrics);
         Map<EncryptedUpdateTuple, SecretKey> searchResults = adapter.sendSearchRequest(searchToken);
-        return sseClientFacade.extractAddedDocIds(searchResults);
+        if (metrics != null) {
+            metrics.recordSearchRequestRoundTripLatency(System.nanoTime() - phaseStart);
+        }
+
+        phaseStart = startTiming(metrics);
+        List<String> docIds = sseClientFacade.extractAddedDocIds(searchResults);
+        if (metrics != null) {
+            metrics.recordResultProcessingLatency(System.nanoTime() - phaseStart);
+        }
+        return docIds;
+    }
+
+    private static long startTiming(SearchOperationMetrics metrics) {
+        return metrics == null ? 0L : System.nanoTime();
     }
 
     public void update(KeywordUpdate update) {

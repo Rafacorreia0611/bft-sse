@@ -243,6 +243,7 @@ load_config() {
 
   SCENARIO="$(get_property scenario)"
   CLIENT_ID="$(get_property clientId)"
+  VOCABULARY_PATH="$(get_property vocabularyPath)"
   WARMUP_PER_BUCKET="$(get_property warmupPerBucket)"
   MEASUREMENTS_PER_BUCKET="$(get_property measurementsPerBucket)"
   TIMESTAMP_OUTPUTS="$(get_property timestampOutputs)"
@@ -256,6 +257,7 @@ load_config() {
   EXPECTED_SAMPLES_PER_BUCKET=$((WARMUP_PER_BUCKET + MEASUREMENTS_PER_BUCKET))
 
   ABS_DATASET_PATH="$(resolve_config_path "$INPUT_PATH")"
+  ABS_VOCABULARY_PATH="$(resolve_config_path "$VOCABULARY_PATH")"
   BASE_OUTPUT_PATH="$(resolve_config_path "$OUTPUT_PATH")"
   BASE_SUMMARY_PATH="$(resolve_config_path "$SUMMARY_OUTPUT_PATH")"
   BASE_MEAN_PLOT_PATH="$(resolve_config_path "$MEAN_PLOT_OUTPUT_PATH")"
@@ -274,6 +276,7 @@ load_config() {
   validate_client_dir "$POPULATE_CLIENT_DIR" "populateClientDir"
   validate_client_dir "$BENCHMARK_CLIENT_DIR" "benchmarkClientDir"
   validate_boolean "$TIMESTAMP_OUTPUTS" "timestampOutputs"
+  ensure_non_empty_file "$ABS_VOCABULARY_PATH"
 
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
     RUN_DATE="$(date +%d_%m_%Y)"
@@ -561,6 +564,9 @@ write_runtime_config() {
         outputPath=*)
           printf 'outputPath=%s\n' "$ABS_OUTPUT_PATH"
           ;;
+        vocabularyPath=*)
+          printf 'vocabularyPath=%s\n' "$ABS_VOCABULARY_PATH"
+          ;;
         summaryOutputPath=*)
           printf 'summaryOutputPath=%s\n' "$ABS_SUMMARY_PATH"
           ;;
@@ -644,7 +650,7 @@ generate_synthetic_dataset() {
     cd "$ROOT_DIR"
     python3 "$ABS_SYNTHETIC_DATASET_SCRIPT" \
       --output "$ABS_SYNTHETIC_OUTPUT_PATH" \
-      --vocabulary "$ROOT_DIR/datasets/vocabulary/vocabulary.txt" \
+      --vocabulary "$ABS_VOCABULARY_PATH" \
       --keywords-per-doc-count "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" \
       --doc-counts "$SYNTHETIC_DOC_COUNTS" \
       --seed "$SYNTHETIC_SEED"
@@ -797,7 +803,8 @@ run_populate() {
     bash smartrun.sh sse.populatedb.PopulateDB \
       --client-id "$POPULATE_CLIENT_ID" \
       --input "$ABS_DATASET_PATH" \
-      --batch-size "$POPULATE_BATCH_SIZE"
+      --batch-size "$POPULATE_BATCH_SIZE" \
+      --vocabulary "$ABS_VOCABULARY_PATH"
   ) >"$ABS_LOG_DIR/populate.log" 2>&1
 
   if ! grep -q "PopulateDB finished." "$ABS_LOG_DIR/populate.log"; then

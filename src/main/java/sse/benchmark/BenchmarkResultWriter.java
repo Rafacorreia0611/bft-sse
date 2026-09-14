@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
+import sse.metrics.SearchOperationMetrics;
+
 public final class BenchmarkResultWriter implements Closeable {
 
     private final BufferedWriter writer;
@@ -30,7 +32,10 @@ public final class BenchmarkResultWriter implements Closeable {
     }
 
     public void writeSearchHeader() throws IOException {
-        writer.write("scenario,operation,run,keyword,doc_count,bucket,cache_mode,latency_ns");
+        writer.write("scenario,operation,run,keyword,doc_count,bucket,"
+                + "total_latency_ns,normalization_latency_ns,state_request_latency_ns,"
+                + "address_resolution_latency_ns,oram_read_latency_ns,token_build_latency_ns,"
+                + "search_request_round_trip_latency_ns,result_processing_latency_ns");
         writer.newLine();
     }
 
@@ -40,8 +45,8 @@ public final class BenchmarkResultWriter implements Closeable {
                                   String keyword,
                                   int docCount,
                                   String bucket,
-                                  String cacheMode,
-                                  long latencyNanos) throws IOException {
+                                  long totalLatencyNanos,
+                                  SearchOperationMetrics metrics) throws IOException {
         writer.write(csvValue(scenarioName));
         writer.write(',');
         writer.write(csvValue(operation.name()));
@@ -54,11 +59,22 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(',');
         writer.write(csvValue(bucket));
         writer.write(',');
-        writer.write(csvValue(cacheMode));
+        writer.write(Long.toString(totalLatencyNanos));
         writer.write(',');
-        writer.write(Long.toString(latencyNanos));
+        writer.write(Long.toString(metrics.normalizationLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.oramReadLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.tokenBuildLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.searchRequestRoundTripLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.resultProcessingLatencyNanos()));
         writer.newLine();
-        writer.flush();
     }
 
     public void writeUpdateHeader() throws IOException {
@@ -93,7 +109,6 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(',');
         writer.write(Long.toString(latencyNanos));
         writer.newLine();
-        writer.flush();
     }
 
     @Override

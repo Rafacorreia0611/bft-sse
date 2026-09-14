@@ -1,12 +1,16 @@
 package sse.benchmark.scenario;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import sse.benchmark.BenchmarkBucket;
 import sse.benchmark.BenchmarkConfig;
@@ -17,6 +21,7 @@ import sse.dataset.KeywordDocIdsEntry;
 import sse.dataset.KeywordDocIdsReader;
 import sse.demo.client.ConfidentialClientAdapter;
 import sse.demo.client.SSEClientHandler;
+import sse.metrics.SearchOperationMetrics;
 import vss.facade.SecretSharingException;
 
 public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
@@ -38,15 +43,20 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
 
     @Override
     public void run(BenchmarkConfig config, BenchmarkResultWriter resultWriter) throws Exception {
-        validateConfig(config);
+        Path vocabularyPath = Paths.get(config.vocabularyPath());
+        validateVocabularyPath(vocabularyPath);
 
         List<KeywordDocIdsEntry> entries = loadEntries(config.inputPath());
         Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket = groupEntriesByBucket(entries, config.buckets());
         validateEntries(entriesByBucket, config);
 
         ConfidentialClientAdapter adapter = createAdapter(config.clientId());
-        SSEClientHandler clientHandler = new SSEClientHandler(adapter);
+        SSEClientHandler clientHandler = new SSEClientHandler(
+                adapter,
+                vocabularyPath
+        );
         try {
+            clientHandler.initializeState();
             runWarmup(clientHandler, entriesByBucket, config);
             runMeasurements(clientHandler, entriesByBucket, config, resultWriter);
         } finally {
@@ -55,16 +65,10 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         }
     }
 
-    private void validateConfig(BenchmarkConfig config) {
-        if (!name().equals(config.scenarioName())) {
-            throw new IllegalArgumentException("Scenario name mismatch: expected " + name()
-                    + " but got " + config.scenarioName());
-        }
-        if (config.buckets().isEmpty()) {
-            throw new IllegalArgumentException("At least one benchmark bucket must be configured");
-        }
-        if (config.measurementIterations() <= 0) {
-            throw new IllegalArgumentException("measurementIterations must be greater than 0");
+    private void validateVocabularyPath(Path path) {
+        if (!Files.exists(path) || !Files.isRegularFile(path) || !Files.isReadable(path)) {
+            throw new IllegalArgumentException("Vocabulary file does not exist or is not readable: "
+                    + path.toAbsolutePath());
         }
     }
 
@@ -73,8 +77,7 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         Path path = Paths.get(inputPath);
         List<KeywordDocIdsEntry> entries = new ArrayList<KeywordDocIdsEntry>();
 
-        java.io.BufferedReader reader = datasetReader.openReader(path);
-        try {
+        try (BufferedReader reader = datasetReader.openReader(path)) {
             String line;
             long lineNumber = 0L;
             while ((line = reader.readLine()) != null) {
@@ -84,14 +87,8 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
                     entries.add(entry);
                 }
             }
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new IllegalStateException("Failed to read benchmark input " + path.toAbsolutePath(), e);
-        } finally {
-            try {
-                reader.close();
-            } catch (java.io.IOException e) {
-                throw new IllegalStateException("Failed to close benchmark input " + path.toAbsolutePath(), e);
-            }
         }
 
         return entries;
@@ -106,9 +103,10 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         }
 
         for (KeywordDocIdsEntry entry : entries) {
-            BenchmarkBucket bucket = findBucket(entry, buckets);
+            int docCount = activeDocumentCount(entry);
+            BenchmarkBucket bucket = findBucket(docCount, buckets);
             if (bucket == null) {
-                throw new IllegalArgumentException("Keyword '" + entry.keyword() + "' with " + entry.docIds().size()
+                throw new IllegalArgumentException("Keyword '" + entry.keyword() + "' with " + docCount
                         + " docs does not fit any configured benchmark bucket");
             }
             entriesByBucket.get(bucket).add(entry);
@@ -143,7 +141,7 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
             for (int i = 0; i < config.warmupIterations(); i++) {
                 KeywordDocIdsEntry entry = entries.get(i);
                 List<String> results = clientHandler.search(entry.keyword());
-                validateResultCount(entry, results);
+                validateResults(entry, results);
             }
         }
     }
@@ -161,42 +159,28 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
 
             for (int i = startIndex; i < endIndex; i++) {
                 KeywordDocIdsEntry entry = entries.get(i);
+                SearchOperationMetrics metrics = new SearchOperationMetrics();
 
-                long freshStartTime = System.nanoTime();
-                List<String> freshResults = clientHandler.search(entry.keyword());
-                long freshEndTime = System.nanoTime();
-                validateResultCount(entry, freshResults);
+                long startTime = System.nanoTime();
+                List<String> results = clientHandler.search(entry.keyword(), metrics);
+                long totalLatencyNanos = System.nanoTime() - startTime;
+
+                validateResults(entry, results);
                 resultWriter.writeSearchSample(
                         name(),
                         operation(),
                         run++,
                         entry.keyword(),
-                        entry.docIds().size(),
+                        activeDocumentCount(entry),
                         bucket.label(),
-                        "fresh",
-                        freshEndTime - freshStartTime
-                );
-
-                long cachedStartTime = System.nanoTime();
-                List<String> cachedResults = clientHandler.search(entry.keyword());
-                long cachedEndTime = System.nanoTime();
-                validateResultCount(entry, cachedResults);
-                resultWriter.writeSearchSample(
-                        name(),
-                        operation(),
-                        run++,
-                        entry.keyword(),
-                        entry.docIds().size(),
-                        bucket.label(),
-                        "cached",
-                        cachedEndTime - cachedStartTime
+                        totalLatencyNanos,
+                        metrics
                 );
             }
         }
     }
 
-    private BenchmarkBucket findBucket(KeywordDocIdsEntry entry, List<BenchmarkBucket> buckets) {
-        int docCount = entry.docIds().size();
+    private BenchmarkBucket findBucket(int docCount, List<BenchmarkBucket> buckets) {
         for (BenchmarkBucket bucket : buckets) {
             if (bucket.contains(docCount)) {
                 return bucket;
@@ -205,14 +189,22 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         return null;
     }
 
-    private void validateResultCount(KeywordDocIdsEntry entry, List<String> results) {
-        if (results == null) {
-            throw new IllegalStateException("Search returned null for keyword '" + entry.keyword() + "'");
+    private int activeDocumentCount(KeywordDocIdsEntry entry) {
+        return new HashSet<String>(entry.docIds()).size();
+    }
+
+    private void validateResults(KeywordDocIdsEntry entry, List<String> results) {
+        Set<String> expectedDocIds = new HashSet<String>(entry.docIds());
+        Set<String> actualDocIds = new HashSet<String>(results);
+
+        if (actualDocIds.size() != results.size()) {
+            throw new IllegalStateException("Search returned duplicate document IDs for keyword '"
+                    + entry.keyword() + "'");
         }
-        int expectedCount = entry.docIds().size();
-        if (results.size() != expectedCount) {
-            throw new IllegalStateException("Search returned " + results.size() + " results for keyword '"
-                    + entry.keyword() + "', expected " + expectedCount);
+        if (!expectedDocIds.equals(actualDocIds)) {
+            throw new IllegalStateException("Search returned a different active document set for keyword '"
+                    + entry.keyword() + "': expected=" + expectedDocIds.size()
+                    + " documents, actual=" + actualDocIds.size());
         }
     }
 }
