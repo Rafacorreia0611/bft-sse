@@ -15,6 +15,17 @@ from pathlib import Path
 from typing import Iterable, List, Sequence
 
 
+METRICS = (
+    ("total_latency", "total_latency_ns"),
+    ("normalization_latency", "normalization_latency_ns"),
+    ("state_request_latency", "state_request_latency_ns"),
+    ("address_resolution_latency", "address_resolution_latency_ns"),
+    ("oram_read_latency", "oram_read_latency_ns"),
+    ("token_build_latency", "token_build_latency_ns"),
+    ("search_request_round_trip_latency", "search_request_round_trip_latency_ns"),
+    ("result_processing_latency", "result_processing_latency_ns"),
+)
+
 REQUIRED_COLUMNS = (
     "scenario",
     "operation",
@@ -22,14 +33,9 @@ REQUIRED_COLUMNS = (
     "keyword",
     "doc_count",
     "bucket",
-    "cache_mode",
-    "latency_ns",
-)
+) + tuple(column for _, column in METRICS)
 
-CACHE_MODE_ORDER = {
-    "fresh": 0,
-    "cached": 1,
-}
+METRIC_ORDER = {name: index for index, (name, _) in enumerate(METRICS)}
 
 
 @dataclass(frozen=True)
@@ -40,21 +46,15 @@ class Sample:
     keyword: str
     doc_count: int
     bucket: str
-    cache_mode: str
-    latency_ns: int
-
-    @property
-    def latency_ms(self) -> float:
-        return self.latency_ns / 1_000_000.0
+    latencies_ns: tuple[int, ...]
 
 
 @dataclass(frozen=True)
 class SummaryRow:
     bucket: str
-    bucket_label: str
     bucket_min_docs: int | None
     bucket_max_docs: int | None
-    cache_mode: str
+    metric: str
     n: int
     min_ms: float
     median_ms: float
@@ -131,8 +131,9 @@ def parse_sample(row: dict[str, str], line_number: int) -> Sample:
         keyword = require_value(row, "keyword", line_number)
         doc_count = int(require_value(row, "doc_count", line_number))
         bucket = require_value(row, "bucket", line_number)
-        cache_mode = require_value(row, "cache_mode", line_number)
-        latency_ns = int(require_value(row, "latency_ns", line_number))
+        latencies_ns = tuple(
+            int(require_value(row, column, line_number)) for _, column in METRICS
+        )
     except ValueError as exc:
         raise ValueError(f"Invalid value on line {line_number}: {exc}") from exc
 
@@ -143,8 +144,7 @@ def parse_sample(row: dict[str, str], line_number: int) -> Sample:
         keyword=keyword,
         doc_count=doc_count,
         bucket=bucket,
-        cache_mode=cache_mode,
-        latency_ns=latency_ns,
+        latencies_ns=latencies_ns,
     )
 
 
@@ -160,30 +160,31 @@ def summarize_samples(samples: Iterable[Sample]) -> List[SummaryRow]:
     bucket_bounds: dict[str, tuple[int | None, int | None]] = {}
 
     for sample in samples:
-        key = (sample.bucket, sample.cache_mode)
-        grouped.setdefault(key, []).append(sample.latency_ms)
+        for (metric, _), latency_ns in zip(METRICS, sample.latencies_ns):
+            key = (sample.bucket, metric)
+            grouped.setdefault(key, []).append(latency_ns / 1_000_000.0)
         bucket_bounds.setdefault(sample.bucket, parse_bucket_bounds(sample.bucket))
 
     ordered_items = sorted(
         grouped.items(),
         key=lambda item: (
             bucket_sort_key(bucket_bounds[item[0][0]][0]),
-            CACHE_MODE_ORDER.get(item[0][1], 99),
-            item[0][1],
+            bucket_sort_key(bucket_bounds[item[0][0]][1]),
+            item[0][0],
+            METRIC_ORDER[item[0][1]],
         ),
     )
 
     rows: List[SummaryRow] = []
-    for (bucket, cache_mode), latencies_ms in ordered_items:
+    for (bucket, metric), latencies_ms in ordered_items:
         sorted_latencies = sorted(latencies_ms)
         bucket_min_docs, bucket_max_docs = bucket_bounds[bucket]
         rows.append(
             SummaryRow(
                 bucket=bucket,
-                bucket_label=format_bucket_label(bucket, bucket_min_docs, bucket_max_docs),
                 bucket_min_docs=bucket_min_docs,
                 bucket_max_docs=bucket_max_docs,
-                cache_mode=cache_mode,
+                metric=metric,
                 n=len(sorted_latencies),
                 min_ms=sorted_latencies[0],
                 median_ms=statistics.median(sorted_latencies),
@@ -205,12 +206,6 @@ def parse_bucket_bounds(bucket: str) -> tuple[int | None, int | None]:
         return (int(parts[0]), int(parts[1]))
     except ValueError:
         return (None, None)
-
-
-def format_bucket_label(bucket: str, bucket_min_docs: int | None, bucket_max_docs: int | None) -> str:
-    if bucket_min_docs is not None and bucket_max_docs is not None:
-        return f"{bucket_min_docs}-{bucket_max_docs}"
-    return bucket.replace(":", "-")
 
 
 def bucket_sort_key(value: int | None) -> int:
@@ -237,10 +232,9 @@ def write_summary(output_path: Path, rows: Sequence[SummaryRow]) -> None:
         writer.writerow(
             (
                 "bucket",
-                "bucket_label",
                 "bucket_min_docs",
                 "bucket_max_docs",
-                "cache_mode",
+                "metric",
                 "n",
                 "min_ms",
                 "median_ms",
@@ -254,10 +248,9 @@ def write_summary(output_path: Path, rows: Sequence[SummaryRow]) -> None:
             writer.writerow(
                 (
                     row.bucket,
-                    row.bucket_label,
                     "" if row.bucket_min_docs is None else row.bucket_min_docs,
                     "" if row.bucket_max_docs is None else row.bucket_max_docs,
-                    row.cache_mode,
+                    row.metric,
                     row.n,
                     format_float(row.min_ms),
                     format_float(row.median_ms),
@@ -274,13 +267,15 @@ def format_float(value: float) -> str:
 
 
 def print_summary_warnings(rows: Sequence[SummaryRow]) -> None:
+    warned_buckets: set[str] = set()
     for row in rows:
-        if row.n < 20:
+        if row.n < 20 and row.bucket not in warned_buckets:
             print(
-                f"Warning: group bucket={row.bucket} cache_mode={row.cache_mode} has only n={row.n}; "
+                f"Warning: bucket={row.bucket} has only n={row.n} samples per metric; "
                 "p95 and p99 will be unstable.",
                 file=sys.stderr,
             )
+            warned_buckets.add(row.bucket)
 
 
 def main() -> int:
