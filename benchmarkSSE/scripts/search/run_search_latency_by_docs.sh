@@ -4,17 +4,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/search_latency_by_docs.properties"
+# Matches METRICS in summarize_search_latency.py.
+N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
 CONFIG_DIR=""
 REPLICA_COUNT_OVERRIDE=""
 REPLICA_COUNT_SOURCE="config"
 
 REPLICA_PIDS=()
+ACTIVE_CLIENT_PID=""
 CLEANUP_DONE=0
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [configPath] [--config PATH] [--replicas N]
+Usage: $(basename "$0") [configPath] [--config PATH] [--sseReplicas N]
 EOF
 }
 
@@ -51,19 +54,19 @@ parse_args() {
         fi
         shift
         ;;
-      --replicas)
+      --sseReplicas)
         if [[ "$#" -lt 2 || "$2" == --* ]]; then
-          echo "Missing value for --replicas." >&2
+          echo "Missing value for --sseReplicas." >&2
           usage
           exit 1
         fi
         REPLICA_COUNT_OVERRIDE="$2"
         shift 2
         ;;
-      --replicas=*)
-        REPLICA_COUNT_OVERRIDE="${1#--replicas=}"
+      --sseReplicas=*)
+        REPLICA_COUNT_OVERRIDE="${1#--sseReplicas=}"
         if [[ -z "$REPLICA_COUNT_OVERRIDE" ]]; then
-          echo "Missing value for --replicas." >&2
+          echo "Missing value for --sseReplicas." >&2
           usage
           exit 1
         fi
@@ -162,38 +165,35 @@ place_path_in_run_dir() {
 terminate_tracked_replicas() {
   local pid
 
+  [[ "${#REPLICA_PIDS[@]}" -gt 0 ]] || return
+
   for pid in "${REPLICA_PIDS[@]:-}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-    fi
+    [[ -n "$pid" ]] || continue
+    terminate_process_tree "$pid" TERM
   done
 
   sleep 1
 
   for pid in "${REPLICA_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] || continue
     if kill -0 "$pid" 2>/dev/null; then
-      kill -9 "$pid" 2>/dev/null || true
+      terminate_process_tree "$pid" KILL
     fi
     wait "$pid" 2>/dev/null || true
   done
 }
 
-terminate_local_benchmark_processes() {
-  local local_deploy_pattern
+terminate_process_tree() {
+  local pid="$1"
+  local signal="$2"
+  local child
 
-  local_deploy_pattern="$ROOT_DIR/build/local/.*/pairing/lib"
+  while read -r child; do
+    [[ -n "$child" ]] || continue
+    terminate_process_tree "$child" "$signal"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
 
-  pkill -TERM -f "${local_deploy_pattern}.*sse.benchmark.BenchmarkClient" 2>/dev/null || true
-  pkill -TERM -f "${local_deploy_pattern}.*sse.populatedb.PopulateDB" 2>/dev/null || true
-  pkill -TERM -f "${local_deploy_pattern}.*sse.demo.server.Server" 2>/dev/null || true
-  pkill -TERM -f "$ROOT_DIR/build/local/.*/smartrun.sh" 2>/dev/null || true
-
-  sleep 1
-
-  pkill -KILL -f "${local_deploy_pattern}.*sse.benchmark.BenchmarkClient" 2>/dev/null || true
-  pkill -KILL -f "${local_deploy_pattern}.*sse.populatedb.PopulateDB" 2>/dev/null || true
-  pkill -KILL -f "${local_deploy_pattern}.*sse.demo.server.Server" 2>/dev/null || true
-  pkill -KILL -f "$ROOT_DIR/build/local/.*/smartrun.sh" 2>/dev/null || true
+  kill "-$signal" "$pid" 2>/dev/null || true
 }
 
 cleanup() {
@@ -209,32 +209,34 @@ cleanup() {
     echo "Cleaning up local benchmark processes..."
   fi
 
-  terminate_tracked_replicas
-  terminate_local_benchmark_processes
+  if [[ -n "$ACTIVE_CLIENT_PID" ]]; then
+    terminate_process_tree "$ACTIVE_CLIENT_PID" TERM 2>/dev/null
+  fi
+  terminate_tracked_replicas 2>/dev/null
+  if [[ -n "$ACTIVE_CLIENT_PID" ]]; then
+    terminate_process_tree "$ACTIVE_CLIENT_PID" KILL 2>/dev/null
+    wait "$ACTIVE_CLIENT_PID" 2>/dev/null || true
+  fi
 
   exit "$exit_status"
 }
 
 trap cleanup EXIT INT TERM
 
-kill_existing_replicas() {
-  echo "Stopping any existing local benchmark processes..."
-  terminate_local_benchmark_processes
-  sleep 1
-}
-
 load_config() {
   ensure_file_exists "$CONFIG_PATH"
 
   DATASET_TYPE="$(get_property datasetType)"
 
-  REPLICA_COUNT="$(get_property replicaCount)"
+  REPLICA_COUNT="$(get_property sseReplicas)"
   if [[ -n "$REPLICA_COUNT_OVERRIDE" ]]; then
     REPLICA_COUNT="$REPLICA_COUNT_OVERRIDE"
     REPLICA_COUNT_SOURCE="CLI override"
   else
     REPLICA_COUNT_SOURCE="config"
   fi
+  ORAM_REPLICA_COUNT="$(get_property oramReplicas)"
+  ORAM_MAX_CONCURRENT_CLIENTS="$(get_property oramMaxConcurrentClients)"
   DEPLOY_CLIENT_COUNT="$(get_property deployClientCount)"
   POPULATE_CLIENT_DIR="$(get_property populateClientDir)"
   POPULATE_CLIENT_ID="$(get_property populateClientId)"
@@ -267,8 +269,20 @@ load_config() {
   ABS_SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/syntheticDataset.py"
 
   validate_dataset_config
-  validate_positive_integer "$REPLICA_COUNT" "replicaCount"
-  validate_minimum_replica_count "$REPLICA_COUNT"
+  validate_positive_integer "$REPLICA_COUNT" "sseReplicas"
+  validate_minimum_replica_count "$REPLICA_COUNT" "sseReplicas"
+  if [[ "$ORAM_REPLICA_COUNT" == "-1" ]]; then
+    ORAM_REPLICA_COUNT="$REPLICA_COUNT"
+  fi
+  validate_positive_integer "$ORAM_REPLICA_COUNT" "oramReplicas"
+  validate_minimum_replica_count "$ORAM_REPLICA_COUNT" "oramReplicas"
+  validate_positive_integer "$ORAM_MAX_CONCURRENT_CLIENTS" "oramMaxConcurrentClients"
+  SSE_TTP_PORT=$((11000 + REPLICA_COUNT * 10))
+  ORAM_TTP_PORT=$((12000 + ORAM_REPLICA_COUNT * 10))
+  if (( SSE_TTP_PORT >= 12000 || ORAM_TTP_PORT > 65535 )); then
+    echo "Replica counts exceed the available local SSE/ORAM port ranges." >&2
+    exit 1
+  fi
   calculate_fault_count
   validate_positive_integer "$DEPLOY_CLIENT_COUNT" "deployClientCount"
   validate_positive_integer "$POPULATE_CLIENT_ID" "populateClientId"
@@ -280,10 +294,10 @@ load_config() {
 
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
     RUN_DATE="$(date +%d_%m_%Y)"
-    RUN_NAME="$(date +%H_%M_%S)_r${REPLICA_COUNT}_f${FAULT_COUNT}"
+    RUN_NAME="$(date +%H_%M_%S)_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   else
     RUN_DATE="$(date +%d_%m_%Y)"
-    RUN_NAME="latest_r${REPLICA_COUNT}_f${FAULT_COUNT}"
+    RUN_NAME="latest_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   fi
 
   ABS_OUTPUT_PATH="$(place_path_in_run_dir "$BASE_OUTPUT_PATH" "$RUN_DATE/$RUN_NAME")"
@@ -498,9 +512,10 @@ parse_bucket() {
 
 validate_minimum_replica_count() {
   local replica_count="$1"
+  local label="$2"
 
   if [[ "$replica_count" -lt 4 ]]; then
-    echo "replicaCount must be at least 4 for this BFT benchmark." >&2
+    echo "$label must be at least 4 for this BFT benchmark." >&2
     exit 1
   fi
 }
@@ -550,13 +565,15 @@ write_runtime_config() {
   echo "Writing runtime benchmark config..."
   {
     printf '# Runtime benchmark metadata generated by %s\n' "$(basename "$0")"
-    printf 'runtimeReplicaCount=%s\n' "$REPLICA_COUNT"
+    printf 'runtimeSseReplicas=%s\n' "$REPLICA_COUNT"
+    printf 'runtimeOramReplicas=%s\n' "$ORAM_REPLICA_COUNT"
+    printf 'runtimeOramMaxConcurrentClients=%s\n' "$ORAM_MAX_CONCURRENT_CLIENTS"
     printf 'runtimeFaultCount=%s\n' "$FAULT_COUNT"
-    printf 'runtimeReplicaCountSource=%s\n' "$REPLICA_COUNT_SOURCE"
+    printf 'runtimeSseReplicasSource=%s\n' "$REPLICA_COUNT_SOURCE"
     while IFS= read -r line; do
       case "$line" in
-        replicaCount=*)
-          printf 'replicaCount=%s\n' "$REPLICA_COUNT"
+        sseReplicas=*)
+          printf 'sseReplicas=%s\n' "$REPLICA_COUNT"
           ;;
         inputPath=*)
           printf 'inputPath=%s\n' "$ABS_DATASET_PATH"
@@ -657,19 +674,48 @@ generate_synthetic_dataset() {
   )
 }
 
+check_local_ports() {
+  local replica_id port
+
+  ensure_command_exists lsof
+  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+    for port in $((11000 + replica_id * 10)) $((11001 + replica_id * 10)); do
+      if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        echo "Local SSE port $port is already in use. Stop the existing service before running this benchmark." >&2
+        exit 1
+      fi
+    done
+  done
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    for port in $((12000 + replica_id * 10)) $((12001 + replica_id * 10)); do
+      if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        echo "Local ORAM port $port is already in use. Stop the existing service before running this benchmark." >&2
+        exit 1
+      fi
+    done
+  done
+  for port in "$SSE_TTP_PORT" "$ORAM_TTP_PORT"; do
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "Local TTP port $port is already in use. Stop the existing service before running this benchmark." >&2
+      exit 1
+    fi
+  done
+}
+
 prepare_local_deploy() {
   echo "Preparing clean local deployment..."
   (
     cd "$ROOT_DIR"
-    ./gradlew clean localDeploy -Pservers="$REPLICA_COUNT" -Pclients="$DEPLOY_CLIENT_COUNT"
+    ./gradlew clean localDeploy -Pservers="$REPLICA_COUNT" -PoramServers="$ORAM_REPLICA_COUNT" -Pclients="$DEPLOY_CLIENT_COUNT"
   )
 }
 
 initial_view() {
+  local replica_count="$1"
   local replica_id
   local view=""
 
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  for (( replica_id = 0; replica_id < replica_count; replica_id++ )); do
     if [[ -n "$view" ]]; then
       view+=","
     fi
@@ -681,12 +727,13 @@ initial_view() {
 
 write_local_system_config() {
   local path="$1"
-  local view="$2"
+  local replica_count="$2"
+  local view="$3"
   local tmp_path="${path}.tmp"
 
   awk \
-    -v replica_count="$REPLICA_COUNT" \
-    -v fault_count="$FAULT_COUNT" \
+    -v replica_count="$replica_count" \
+    -v fault_count="$(((replica_count - 1) / 3))" \
     -v initial_view="$view" \
     '
       /^system\.servers\.num[[:space:]]*=/ {
@@ -708,57 +755,82 @@ write_local_system_config() {
 
 write_local_hosts_config() {
   local path="$1"
+  local replica_count="$2"
+  local base_port="$3"
+  local ttp_port="$4"
   local tmp_path="${path}.tmp"
   local replica_id client_port server_port
 
   {
     printf '# This hosts.config was generated by %s for the local benchmark deploy.\n' "$(basename "$0")"
     printf '#server id, address and port (the ids from 0 to n-1 are the service replicas)\n'
-    for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
-      client_port=$((11000 + replica_id * 10))
+    for (( replica_id = 0; replica_id < replica_count; replica_id++ )); do
+      client_port=$((base_port + replica_id * 10))
       server_port=$((client_port + 1))
       printf '%s 127.0.0.1 %s %s\n' "$replica_id" "$client_port" "$server_port"
     done
     printf '\n'
-    printf '7001 127.0.0.1 11100\n'
+    printf '7002 127.0.0.1 %s\n' "$ttp_port"
   } > "$tmp_path"
   mv "$tmp_path" "$path"
 }
 
 configure_local_deploy() {
-  local view
+  local sse_view oram_view
   local deploy_dir
   local deploy_index
 
-  echo "Configuring local deployment for $REPLICA_COUNT replicas (f=$FAULT_COUNT, source=$REPLICA_COUNT_SOURCE)..."
-  view="$(initial_view)"
+  echo "Configuring local deployment for $REPLICA_COUNT SSE and $ORAM_REPLICA_COUNT ORAM replicas..."
+  sse_view="$(initial_view "$REPLICA_COUNT")"
+  oram_view="$(initial_view "$ORAM_REPLICA_COUNT")"
 
   for (( deploy_index = 0; deploy_index < REPLICA_COUNT; deploy_index++ )); do
     deploy_dir="$ROOT_DIR/build/local/rep${deploy_index}"
     ensure_file_exists "$deploy_dir/config/system.config"
     ensure_file_exists "$deploy_dir/config/hosts.config"
-    write_local_system_config "$deploy_dir/config/system.config" "$view"
-    write_local_hosts_config "$deploy_dir/config/hosts.config"
+    write_local_system_config "$deploy_dir/config/system.config" "$REPLICA_COUNT" "$sse_view"
+    write_local_hosts_config "$deploy_dir/config/hosts.config" "$REPLICA_COUNT" 11000 "$SSE_TTP_PORT"
+  done
+
+  for (( deploy_index = 0; deploy_index < ORAM_REPLICA_COUNT; deploy_index++ )); do
+    deploy_dir="$ROOT_DIR/build/local/oramRep${deploy_index}"
+    ensure_file_exists "$deploy_dir/config/system.config"
+    ensure_file_exists "$deploy_dir/config/hosts.config"
+    write_local_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT" "$oram_view"
+    write_local_hosts_config "$deploy_dir/config/hosts.config" "$ORAM_REPLICA_COUNT" 12000 "$ORAM_TTP_PORT"
   done
 
   for (( deploy_index = 0; deploy_index < DEPLOY_CLIENT_COUNT; deploy_index++ )); do
     deploy_dir="$ROOT_DIR/build/local/cli${deploy_index}"
     ensure_file_exists "$deploy_dir/config/system.config"
     ensure_file_exists "$deploy_dir/config/hosts.config"
-    write_local_system_config "$deploy_dir/config/system.config" "$view"
-    write_local_hosts_config "$deploy_dir/config/hosts.config"
+    ensure_file_exists "$deploy_dir/sse_config/system.config"
+    ensure_file_exists "$deploy_dir/sse_config/hosts.config"
+    write_local_system_config "$deploy_dir/sse_config/system.config" "$REPLICA_COUNT" "$sse_view"
+    write_local_hosts_config "$deploy_dir/sse_config/hosts.config" "$REPLICA_COUNT" 11000 "$SSE_TTP_PORT"
+    write_local_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT" "$oram_view"
+    write_local_hosts_config "$deploy_dir/config/hosts.config" "$ORAM_REPLICA_COUNT" 12000 "$ORAM_TTP_PORT"
   done
 }
 
 start_replicas() {
   local replica_id
 
-  echo "Starting replicas..."
+  echo "Starting ORAM replicas..."
   REPLICA_PIDS=()
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    (
+      cd "$ROOT_DIR/build/local/oramRep${replica_id}"
+      exec bash smartrun.sh oram.server.ORAMServer "$ORAM_MAX_CONCURRENT_CLIENTS" "$replica_id"
+    ) >"$ABS_LOG_DIR/oramRep${replica_id}.log" 2>&1 &
+    REPLICA_PIDS+=("$!")
+  done
+
+  echo "Starting SSE replicas..."
   for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
     (
       cd "$ROOT_DIR/build/local/rep${replica_id}"
-      bash smartrun.sh sse.demo.server.Server "$replica_id"
+      exec bash smartrun.sh sse.demo.server.Server "$replica_id"
     ) >"$ABS_LOG_DIR/rep${replica_id}.log" 2>&1 &
     REPLICA_PIDS+=("$!")
   done
@@ -767,12 +839,24 @@ start_replicas() {
 wait_for_replicas_ready() {
   local timeout_seconds=60
   local deadline=$((SECONDS + timeout_seconds))
-  local replica_id
+  local replica_id pid
   local ready
 
   echo "Waiting for replicas to become ready..."
   while (( SECONDS < deadline )); do
     ready=1
+    for pid in "${REPLICA_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "A replica exited before becoming ready; inspect logs in $ABS_LOG_DIR." >&2
+        exit 1
+      fi
+    done
+    for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+      if ! grep -q "Ready to process operations" "$ABS_LOG_DIR/oramRep${replica_id}.log" 2>/dev/null; then
+        ready=0
+        break
+      fi
+    done
     for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
       if ! grep -q "Ready to process operations" "$ABS_LOG_DIR/rep${replica_id}.log" 2>/dev/null; then
         ready=0
@@ -789,6 +873,10 @@ wait_for_replicas_ready() {
   done
 
   echo "Timed out while waiting for replicas to become ready." >&2
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    echo "--- oramRep${replica_id}.log (tail) ---" >&2
+    tail -n 20 "$ABS_LOG_DIR/oramRep${replica_id}.log" >&2 || true
+  done
   for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
     echo "--- rep${replica_id}.log (tail) ---" >&2
     tail -n 20 "$ABS_LOG_DIR/rep${replica_id}.log" >&2 || true
@@ -800,12 +888,14 @@ run_populate() {
   echo "Running PopulateDB..."
   (
     cd "$ROOT_DIR/build/local/$POPULATE_CLIENT_DIR"
-    bash smartrun.sh sse.populatedb.PopulateDB \
+    exec bash smartrun.sh sse.populatedb.PopulateDB \
       --client-id "$POPULATE_CLIENT_ID" \
       --input "$ABS_DATASET_PATH" \
       --batch-size "$POPULATE_BATCH_SIZE" \
       --vocabulary "$ABS_VOCABULARY_PATH"
-  ) >"$ABS_LOG_DIR/populate.log" 2>&1
+  ) >"$ABS_LOG_DIR/populate.log" 2>&1 &
+  ACTIVE_CLIENT_PID="$!"
+  wait_for_active_client
 
   if ! grep -q "PopulateDB finished." "$ABS_LOG_DIR/populate.log"; then
     echo "PopulateDB did not finish successfully." >&2
@@ -814,53 +904,38 @@ run_populate() {
   fi
 }
 
-verify_population_ready() {
-  local replica_id
-  local ready_messages=0
+wait_for_active_client() {
+  local exit_status=0
 
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
-    if grep -q "SSE database population is ready." "$ABS_LOG_DIR/rep${replica_id}.log" 2>/dev/null; then
-      ready_messages=$((ready_messages + 1))
-    fi
-  done
-
-  if [[ "$ready_messages" -eq 0 ]]; then
-    echo "Warning: no replica log contained the population-ready message." >&2
-  else
-    echo "Population-ready message observed in $ready_messages replica log(s)."
-  fi
+  wait "$ACTIVE_CLIENT_PID" || exit_status=$?
+  ACTIVE_CLIENT_PID=""
+  return "$exit_status"
 }
 
 run_benchmark() {
   echo "Running benchmark client..."
   (
     cd "$ROOT_DIR/build/local/$BENCHMARK_CLIENT_DIR"
-    bash smartrun.sh sse.benchmark.BenchmarkClient "$RUNTIME_CONFIG_PATH"
-  ) >"$ABS_LOG_DIR/benchmark.log" 2>&1
+    exec bash smartrun.sh sse.benchmark.BenchmarkClient "$RUNTIME_CONFIG_PATH"
+  ) >"$ABS_LOG_DIR/benchmark.log" 2>&1 &
+  ACTIVE_CLIENT_PID="$!"
+  wait_for_active_client
 }
 
 verify_results() {
-  local line_count
+  local bucket_count expected_rows actual_rows
 
   ensure_non_empty_file "$ABS_OUTPUT_PATH"
 
-  if ! head -n 1 "$ABS_OUTPUT_PATH" | grep -q "^scenario,operation,run,keyword,doc_count,bucket,cache_mode,latency_ns$"; then
-    echo "Unexpected CSV header in $ABS_OUTPUT_PATH" >&2
+  bucket_count="$(csv_item_count "$BUCKETS")"
+  expected_rows=$((bucket_count * MEASUREMENTS_PER_BUCKET))
+  actual_rows=$(( $(wc -l < "$ABS_OUTPUT_PATH") - 1 ))
+  if (( actual_rows != expected_rows )); then
+    echo "Expected $expected_rows search measurements, found $actual_rows in $ABS_OUTPUT_PATH." >&2
     exit 1
   fi
 
-  if ! grep -q ",fresh," "$ABS_OUTPUT_PATH"; then
-    echo "CSV output does not contain any fresh measurements." >&2
-    exit 1
-  fi
-
-  if ! grep -q ",cached," "$ABS_OUTPUT_PATH"; then
-    echo "CSV output does not contain any cached measurements." >&2
-    exit 1
-  fi
-
-  line_count="$(wc -l < "$ABS_OUTPUT_PATH")"
-  echo "Benchmark results written to $ABS_OUTPUT_PATH ($line_count lines)."
+  echo "Benchmark results written to $ABS_OUTPUT_PATH ($actual_rows measurements)."
 }
 
 summarize_results() {
@@ -876,34 +951,19 @@ summarize_results() {
 }
 
 verify_summary() {
-  local line_count
-  local summary_header
+  local bucket_count expected_rows actual_rows
 
   ensure_non_empty_file "$ABS_SUMMARY_PATH"
 
-  summary_header="$(head -n 1 "$ABS_SUMMARY_PATH" | tr -d '\r')"
-  if [[ "$summary_header" != $'bucket\tbucket_label\tbucket_min_docs\tbucket_max_docs\tcache_mode\tn\tmin_ms\tmedian_ms\tmean_ms\tp95_ms\tp99_ms\tmax_ms' ]]; then
-    echo "Unexpected TSV header in $ABS_SUMMARY_PATH" >&2
+  bucket_count="$(csv_item_count "$BUCKETS")"
+  expected_rows=$((bucket_count * N_METRICS))
+  actual_rows=$(( $(wc -l < "$ABS_SUMMARY_PATH") - 1 ))
+  if (( actual_rows != expected_rows )); then
+    echo "Expected $expected_rows metric summary rows, found $actual_rows in $ABS_SUMMARY_PATH." >&2
     exit 1
   fi
 
-  if ! grep -q $'\tfresh\t' "$ABS_SUMMARY_PATH"; then
-    echo "Summary output does not contain any fresh rows." >&2
-    exit 1
-  fi
-
-  if ! grep -q $'\tcached\t' "$ABS_SUMMARY_PATH"; then
-    echo "Summary output does not contain any cached rows." >&2
-    exit 1
-  fi
-
-  line_count="$(wc -l < "$ABS_SUMMARY_PATH")"
-  if [[ "$line_count" -le 1 ]]; then
-    echo "Summary output does not contain any data rows." >&2
-    exit 1
-  fi
-
-  echo "Summary written to $ABS_SUMMARY_PATH ($line_count lines)."
+  echo "Summary written to $ABS_SUMMARY_PATH ($actual_rows metric rows)."
 }
 
 generate_plots() {
@@ -934,13 +994,12 @@ main() {
   prepare_directories
   write_runtime_config
   generate_dataset
-  kill_existing_replicas
+  check_local_ports
   prepare_local_deploy
   configure_local_deploy
   start_replicas
   wait_for_replicas_ready
   run_populate
-  verify_population_ready
   run_benchmark
   verify_results
   summarize_results

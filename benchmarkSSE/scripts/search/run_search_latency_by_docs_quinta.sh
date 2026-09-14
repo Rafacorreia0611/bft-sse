@@ -7,6 +7,8 @@ DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/search_latency_by_docs.prop
 DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 DEPLOY_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/quinta_deploy.sh"
 COMMON_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
+# Matches METRICS in summarize_search_latency.py.
+N_METRICS=8
 
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
@@ -96,7 +98,7 @@ load_config() {
   source "$CLUSTER_CONFIG"
 
   DATASET_TYPE="$(get_property datasetType)"
-  REPLICA_COUNT="$(get_property replicaCount)"
+  REPLICA_COUNT="$(get_property sseReplicas)"
   if [[ -n "$REPLICA_COUNT_OVERRIDE" ]]; then
     REPLICA_COUNT="$REPLICA_COUNT_OVERRIDE"
     REPLICA_COUNT_SOURCE="CLI override"
@@ -119,8 +121,8 @@ load_config() {
   MEDIAN_PLOT_OUTPUT_PATH="$(get_property medianPlotOutputPath)"
   BUCKETS=""
 
-  validate_positive_integer "$REPLICA_COUNT" "replicaCount"
-  [[ "$REPLICA_COUNT" -ge 4 ]] || die "replicaCount must be at least 4"
+  validate_positive_integer "$REPLICA_COUNT" "sseReplicas"
+  [[ "$REPLICA_COUNT" -ge 4 ]] || die "sseReplicas must be at least 4"
   validate_positive_integer "$DEPLOY_CLIENT_COUNT" "deployClientCount"
   validate_positive_integer "$POPULATE_CLIENT_ID" "populateClientId"
   validate_positive_integer "$POPULATE_BATCH_SIZE" "populateBatchSize"
@@ -253,7 +255,7 @@ write_local_runtime_config() {
         inputPath=*) printf 'inputPath=%s\n' "$remote_dataset_path" ;;
         outputPath=*) printf 'outputPath=%s\n' "$remote_output_path" ;;
         vocabularyPath=*) printf 'vocabularyPath=%s\n' "$remote_vocabulary_path" ;;
-        replicaCount=*) printf 'replicaCount=%s\n' "$REPLICA_COUNT" ;;
+        sseReplicas=*) printf 'sseReplicas=%s\n' "$REPLICA_COUNT" ;;
         buckets=*)
           printf 'buckets=%s\n' "$BUCKETS"
           wrote_buckets=1
@@ -322,16 +324,32 @@ fetch_results() {
 }
 
 verify_results() {
+  local bucket_count expected_rows actual_rows
+
   [[ -s "$ABS_OUTPUT_PATH" ]] || die "Benchmark CSV not found or empty: $ABS_OUTPUT_PATH"
-  head -n 1 "$ABS_OUTPUT_PATH" | grep -q "^scenario,operation,run,keyword,doc_count,bucket,cache_mode,latency_ns$" || die "Unexpected CSV header"
-  grep -q ",fresh," "$ABS_OUTPUT_PATH" || die "CSV has no fresh measurements"
-  grep -q ",cached," "$ABS_OUTPUT_PATH" || die "CSV has no cached measurements"
+  bucket_count="$(csv_item_count "$BUCKETS")"
+  expected_rows=$((bucket_count * MEASUREMENTS_PER_BUCKET))
+  actual_rows=$(( $(wc -l < "$ABS_OUTPUT_PATH") - 1 ))
+  (( actual_rows == expected_rows )) || die "Expected $expected_rows search measurements, found $actual_rows in $ABS_OUTPUT_PATH"
 }
 
 summarize_and_plot() {
   python3 "$ROOT_DIR/benchmarkSSE/scripts/search/summarize_search_latency.py" --input "$ABS_OUTPUT_PATH" --output "$ABS_SUMMARY_PATH"
   gnuplot -e "input_path='$ABS_SUMMARY_PATH'; mean_output_path='$ABS_MEAN_PLOT_PATH'; median_output_path='$ABS_MEDIAN_PLOT_PATH'" \
     "$ROOT_DIR/benchmarkSSE/gnuplot/search/search_latency_by_docs_mean_median.gp"
+}
+
+verify_summary_and_plots() {
+  local bucket_count expected_rows actual_rows
+
+  [[ -s "$ABS_SUMMARY_PATH" ]] || die "Summary TSV not found or empty: $ABS_SUMMARY_PATH"
+  bucket_count="$(csv_item_count "$BUCKETS")"
+  expected_rows=$((bucket_count * N_METRICS))
+  actual_rows=$(( $(wc -l < "$ABS_SUMMARY_PATH") - 1 ))
+  (( actual_rows == expected_rows )) || die "Expected $expected_rows metric summary rows, found $actual_rows in $ABS_SUMMARY_PATH"
+
+  [[ -s "$ABS_MEAN_PLOT_PATH" ]] || die "Mean plot not found or empty: $ABS_MEAN_PLOT_PATH"
+  [[ -s "$ABS_MEDIAN_PLOT_PATH" ]] || die "Median plot not found or empty: $ABS_MEDIAN_PLOT_PATH"
 }
 
 cleanup() {
@@ -362,6 +380,7 @@ main() {
   fetch_results
   verify_results
   summarize_and_plot
+  verify_summary_and_plots
 
   echo "Benchmark CSV: $ABS_OUTPUT_PATH"
   echo "Summary TSV: $ABS_SUMMARY_PATH"

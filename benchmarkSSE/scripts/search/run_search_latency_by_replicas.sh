@@ -13,7 +13,7 @@ GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/search_latency_by_replicas
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [--config PATH] [--replicas N[,N...]]
+Usage: $(basename "$0") [--config PATH] [--sseReplicas N[,N...]]
 EOF
 }
 
@@ -38,19 +38,19 @@ parse_args() {
         fi
         shift
         ;;
-      --replicas)
+      --sseReplicas)
         if [[ "$#" -lt 2 || "$2" == --* ]]; then
-          echo "Missing value for --replicas." >&2
+          echo "Missing value for --sseReplicas." >&2
           usage
           exit 1
         fi
         REPLICA_LIST="$2"
         shift 2
         ;;
-      --replicas=*)
-        REPLICA_LIST="${1#--replicas=}"
+      --sseReplicas=*)
+        REPLICA_LIST="${1#--sseReplicas=}"
         if [[ -z "$REPLICA_LIST" ]]; then
-          echo "Missing value for --replicas." >&2
+          echo "Missing value for --sseReplicas." >&2
           usage
           exit 1
         fi
@@ -224,7 +224,7 @@ run_one_benchmark() {
     echo "===== Running search latency benchmark with replicaCount=$replica_count f=$fault_count ====="
   } | tee -a "$SWEEP_LOG_PATH"
 
-  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --replicas "$replica_count" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
+  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --sseReplicas "$replica_count" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
     rm -f "$marker_path"
     echo "Benchmark failed for replicaCount=$replica_count." >&2
     exit 1

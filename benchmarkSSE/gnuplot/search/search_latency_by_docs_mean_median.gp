@@ -20,8 +20,6 @@ set grid back xtics ytics ls 81
 set key left top opaque box width 1 samplen 2.2 spacing 1.1
 set xlabel "Result Size Range"
 set ylabel "Time (ms)"
-set xrange [7:14000]
-set yrange [5:2000]
 set logscale x 10
 set logscale y 10
 set xtics rotate by 0 font "Helvetica,11"
@@ -29,19 +27,16 @@ set mxtics 10
 unset mytics
 unset ytics
 set ytics nomirror
-set for [v in "5 10 20 50 100 200 500 1000 2000"] ytics add (sprintf("%g", real(v)) real(v))
-
 set style line 1 lc rgb "#d95f02" lt 1 lw 2.5 pt 7 ps 1.4
-set style line 2 lc rgb "#1b9e77" lt 1 lw 2.5 pt 5 ps 1.4
 
 set output mean_output_path
 set title "Mean Search Latency"
-plot input_path every 2::0 using (sqrt($3 * $4)):9:xticlabels(2) with linespoints ls 1 title "Fresh", \
-     input_path every 2::1 using (sqrt($3 * $4)):9 with linespoints ls 2 title "Cached"
+plot input_path using (strcol(4) eq "total_latency" ? sqrt($2 * $3) : 1/0):8:xticlabels(1) \
+    with linespoints ls 1 title "Total"
 
 set output median_output_path
 set title "Median Search Latency"
-plot input_path every 2::0 using (sqrt($3 * $4)):8:xticlabels(2) with linespoints ls 1 title "Fresh", \
-     input_path every 2::1 using (sqrt($3 * $4)):8 with linespoints ls 2 title "Cached"
+plot input_path using (strcol(4) eq "total_latency" ? sqrt($2 * $3) : 1/0):7:xticlabels(1) \
+    with linespoints ls 1 title "Total"
 
 unset output
