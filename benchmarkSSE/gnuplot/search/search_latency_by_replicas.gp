@@ -44,20 +44,17 @@ set tics out nomirror font plot_font_spec
 set style line 81 lc rgb "#cfcfcf" lt 1 lw 1.1
 set grid back xtics ytics ls 81
 set key left top opaque box width -0.4 samplen 1.7 spacing 1.1 font plot_font_spec
-set xlabel "Replicas" font plot_label_font_spec
+set xlabel "SSE replicas" font plot_label_font_spec
 set ylabel "Time (ms)" font plot_label_font_spec
 set lmargin 12
 set bmargin 4.8
-set xtics ("4" 4, "7" 7, "10" 10) nomirror
+set xtics 1 nomirror
 set ytics nomirror
-set xrange [4:10]
+set xrange [*:*]
+set offsets 0.2,0.2,0,0
 set logscale y 10
-set yrange [5:100000]
+set yrange [*:*]
 unset mytics
-unset ytics
-set ytics nomirror
-set for [v in "10 30 100 300 1000 3000 10000 30000 100000"] ytics add (sprintf("%g", real(v)) real(v))
-set label 1 "Y-axis in logarithmic scale" at graph 0.98, 0.94 right front font sprintf("%s,%d", plot_font, plot_font_size - 3) tc rgb "#555555"
 
 set style line 1 lc rgb "#d95f02" lt 1 lw 1.45 pt 7 ps 1.45
 set style line 2 lc rgb "#1b9e77" lt 1 lw 1.45 pt 5 ps 1.45
@@ -70,6 +67,6 @@ set style line 8 lc rgb "#666666" lt 1 lw 2.4 pt 8 ps 1.25
 
 set output sprintf("%s/search_latency_by_replicas.%s", output_dir, output_ext)
 unset title
-plot for [i=1:bucket_count] sprintf("< awk -F'\\t' 'NR > 1 && ($1 == 4 || $1 == 7 || $1 == 10) && $7 == \"fresh\" && $3 == \"%s\" { print $1 \"\\t\" $11 }' %s", word(bucket_specs, i), input_path) using 1:2 with linespoints ls i title sprintf("%s Docs Returned", word(bucket_labels, i))
+plot for [i=1:bucket_count] sprintf("< awk -F'\\t' 'NR > 1 && $6 == \"total_latency\" && $3 == \"%s\" { print $1 \"\\t\" $10 }' %s", word(bucket_specs, i), input_path) using 1:2 with linespoints ls i title sprintf("%s Docs Returned", word(bucket_labels, i))
 
 unset output

@@ -14,10 +14,9 @@ from typing import Sequence
 
 INPUT_COLUMNS = (
     "bucket",
-    "bucket_label",
     "bucket_min_docs",
     "bucket_max_docs",
-    "cache_mode",
+    "metric",
     "n",
     "min_ms",
     "median_ms",
@@ -28,24 +27,13 @@ INPUT_COLUMNS = (
 )
 
 OUTPUT_COLUMNS = (
-    "replica_count",
-    "fault_count",
-    "bucket",
-    "bucket_label",
-    "bucket_min_docs",
-    "bucket_max_docs",
-    "cache_mode",
-    "n",
-    "min_ms",
-    "median_ms",
-    "mean_ms",
-    "p95_ms",
-    "p99_ms",
-    "max_ms",
+    "sse_replicas",
+    "oram_replicas",
+    *INPUT_COLUMNS,
     "source_run",
 )
 
-RUN_DIR_PATTERN = re.compile(r"_r(?P<replicas>[0-9]+)_f(?P<faults>[0-9]+)$")
+RUN_DIR_PATTERN = re.compile(r"_r(?P<sse>[0-9]+)_o(?P<oram>[0-9]+)$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,9 +57,9 @@ def run_metadata(input_path: Path) -> tuple[int, int, str]:
     run_dir = input_path.parent.name
     match = RUN_DIR_PATTERN.search(run_dir)
     if match is None:
-        raise ValueError(f"Cannot extract replica/fault counts from run directory: {run_dir}")
+        raise ValueError(f"Cannot extract SSE/ORAM replica counts from run directory: {run_dir}")
 
-    return int(match.group("replicas")), int(match.group("faults")), run_dir
+    return int(match.group("sse")), int(match.group("oram")), run_dir
 
 
 def validate_header(fieldnames: Sequence[str], input_path: Path) -> None:
@@ -84,7 +72,7 @@ def read_rows(input_path: Path) -> list[dict[str, str]]:
     if not input_path.is_file():
         raise FileNotFoundError(f"Input TSV not found: {input_path}")
 
-    replica_count, fault_count, source_run = run_metadata(input_path)
+    sse_replicas, oram_replicas, source_run = run_metadata(input_path)
     rows: list[dict[str, str]] = []
 
     with input_path.open("r", encoding="utf-8", newline="") as handle:
@@ -93,8 +81,8 @@ def read_rows(input_path: Path) -> list[dict[str, str]]:
 
         for row in reader:
             output_row = {
-                "replica_count": str(replica_count),
-                "fault_count": str(fault_count),
+                "sse_replicas": str(sse_replicas),
+                "oram_replicas": str(oram_replicas),
                 "source_run": source_run,
             }
             for column in INPUT_COLUMNS:
@@ -107,13 +95,12 @@ def read_rows(input_path: Path) -> list[dict[str, str]]:
 
 
 def sort_key(row: dict[str, str]) -> tuple[int, int, int, int, str]:
-    cache_order = {"fresh": 0, "cached": 1}
     return (
-        int(row["replica_count"]),
-        int(row["fault_count"]),
+        int(row["sse_replicas"]),
+        int(row["oram_replicas"]),
         int(row["bucket_min_docs"] or "0"),
-        cache_order.get(row["cache_mode"], 99),
-        row["cache_mode"],
+        int(row["bucket_max_docs"] or "0"),
+        row["bucket"],
     )
 
 

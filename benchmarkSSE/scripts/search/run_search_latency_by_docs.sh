@@ -9,6 +9,7 @@ N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
 CONFIG_DIR=""
 REPLICA_COUNT_OVERRIDE=""
+ORAM_REPLICA_COUNT_OVERRIDE=""
 REPLICA_COUNT_SOURCE="config"
 
 REPLICA_PIDS=()
@@ -17,7 +18,8 @@ CLEANUP_DONE=0
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [configPath] [--config PATH] [--sseReplicas N]
+Usage: $(basename "$0") [configPath] [--config PATH] [--sseReplicas N] [--oramReplicas N]
+--oramReplicas overrides the properties file; -1 matches the SSE count.
 EOF
 }
 
@@ -67,6 +69,24 @@ parse_args() {
         REPLICA_COUNT_OVERRIDE="${1#--sseReplicas=}"
         if [[ -z "$REPLICA_COUNT_OVERRIDE" ]]; then
           echo "Missing value for --sseReplicas." >&2
+          usage
+          exit 1
+        fi
+        shift
+        ;;
+      --oramReplicas)
+        if [[ "$#" -lt 2 || -z "$2" || "$2" == --* ]]; then
+          echo "Missing value for --oramReplicas." >&2
+          usage
+          exit 1
+        fi
+        ORAM_REPLICA_COUNT_OVERRIDE="$2"
+        shift 2
+        ;;
+      --oramReplicas=*)
+        ORAM_REPLICA_COUNT_OVERRIDE="${1#--oramReplicas=}"
+        if [[ -z "$ORAM_REPLICA_COUNT_OVERRIDE" ]]; then
+          echo "Missing value for --oramReplicas." >&2
           usage
           exit 1
         fi
@@ -136,11 +156,8 @@ ensure_non_empty_file() {
 resolve_config_path() {
   local raw_path="$1"
 
-  if [[ "$raw_path" = /* ]]; then
-    printf '%s\n' "$raw_path"
-  else
-    printf '%s\n' "$CONFIG_DIR/$raw_path"
-  fi
+  python3 -c 'import os, sys; print(os.path.abspath(os.path.join(sys.argv[1], sys.argv[2])))' \
+    "$CONFIG_DIR" "$raw_path"
 }
 
 ensure_command_exists() {
@@ -236,6 +253,9 @@ load_config() {
     REPLICA_COUNT_SOURCE="config"
   fi
   ORAM_REPLICA_COUNT="$(get_property oramReplicas)"
+  if [[ -n "$ORAM_REPLICA_COUNT_OVERRIDE" ]]; then
+    ORAM_REPLICA_COUNT="$ORAM_REPLICA_COUNT_OVERRIDE"
+  fi
   ORAM_MAX_CONCURRENT_CLIENTS="$(get_property oramMaxConcurrentClients)"
   DEPLOY_CLIENT_COUNT="$(get_property deployClientCount)"
   POPULATE_CLIENT_DIR="$(get_property populateClientDir)"
@@ -574,6 +594,9 @@ write_runtime_config() {
       case "$line" in
         sseReplicas=*)
           printf 'sseReplicas=%s\n' "$REPLICA_COUNT"
+          ;;
+        oramReplicas=*)
+          printf 'oramReplicas=%s\n' "$ORAM_REPLICA_COUNT"
           ;;
         inputPath=*)
           printf 'inputPath=%s\n' "$ABS_DATASET_PATH"
@@ -990,6 +1013,7 @@ verify_plots() {
 
 main() {
   parse_args "$@"
+  ensure_command_exists python3
   load_config
   prepare_directories
   write_runtime_config

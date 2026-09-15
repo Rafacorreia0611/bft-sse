@@ -4,8 +4,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/search_latency_by_docs.properties"
+# Matches METRICS in summarize_search_latency.py.
+N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
 REPLICA_LIST="4,7,10,13"
+ORAM_REPLICAS_OVERRIDE=""
 
 DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/search/run_search_latency_by_docs.sh"
 AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/aggregate_search_latency_by_replicas.py"
@@ -13,7 +16,8 @@ GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/search_latency_by_replicas
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [--config PATH] [--sseReplicas N[,N...]]
+Usage: $(basename "$0") [--config PATH] [--sseReplicas N[,N...]] [--oramReplicas N]
+Without --oramReplicas, ORAM follows each SSE count; otherwise it stays fixed at N.
 EOF
 }
 
@@ -51,6 +55,24 @@ parse_args() {
         REPLICA_LIST="${1#--sseReplicas=}"
         if [[ -z "$REPLICA_LIST" ]]; then
           echo "Missing value for --sseReplicas." >&2
+          usage
+          exit 1
+        fi
+        shift
+        ;;
+      --oramReplicas)
+        if [[ "$#" -lt 2 || -z "$2" || "$2" == --* ]]; then
+          echo "Missing value for --oramReplicas." >&2
+          usage
+          exit 1
+        fi
+        ORAM_REPLICAS_OVERRIDE="$2"
+        shift 2
+        ;;
+      --oramReplicas=*)
+        ORAM_REPLICAS_OVERRIDE="${1#--oramReplicas=}"
+        if [[ -z "$ORAM_REPLICAS_OVERRIDE" ]]; then
+          echo "Missing value for --oramReplicas." >&2
           usage
           exit 1
         fi
@@ -128,7 +150,7 @@ doc_counts_to_buckets() {
 }
 
 parse_replica_list() {
-  local raw_list compact_list replica_count
+  local compact_list replica_count
 
   compact_list="${REPLICA_LIST//[[:space:]]/}"
   if [[ -z "$compact_list" ]]; then
@@ -143,6 +165,15 @@ parse_replica_list() {
       exit 1
     fi
   done
+}
+
+validate_oram_replicas() {
+  [[ -n "$ORAM_REPLICAS_OVERRIDE" ]] || return 0
+
+  if ! [[ "$ORAM_REPLICAS_OVERRIDE" =~ ^[0-9]+$ ]] || (( 10#$ORAM_REPLICAS_OVERRIDE < 4 )); then
+    echo "--oramReplicas must be an integer greater than or equal to 4." >&2
+    exit 1
+  fi
 }
 
 load_bucket_config() {
@@ -164,15 +195,22 @@ load_bucket_config() {
 
   BUCKET_SPECS="${BUCKET_LIST//,/ }"
   BUCKET_LABELS=""
+  BUCKET_COUNT=0
   for bucket in $BUCKET_SPECS; do
     [[ -z "$BUCKET_LABELS" ]] || BUCKET_LABELS+=" "
     BUCKET_LABELS+="${bucket/:/-}"
+    BUCKET_COUNT=$((BUCKET_COUNT + 1))
   done
 }
 
-fault_count_for() {
-  local replica_count="$1"
-  printf '%s\n' $(((replica_count - 1) / 3))
+load_summary_location() {
+  local summary_path
+
+  summary_path="$(get_property summaryOutputPath)"
+  summary_path="$(python3 -c 'import os, sys; print(os.path.abspath(os.path.join(sys.argv[1], sys.argv[2])))' \
+    "$(dirname "$CONFIG_PATH")" "$summary_path")"
+  SUMMARY_SEARCH_DIR="$(dirname "$summary_path")"
+  SUMMARY_FILENAME="$(basename "$summary_path")"
 }
 
 prepare_outputs() {
@@ -189,24 +227,24 @@ prepare_outputs() {
 
 latest_summary_for_run() {
   local marker_path="$1"
-  local replica_count="$2"
-  local fault_count="$3"
+  local sse_replicas="$2"
+  local oram_replicas="$3"
   local summary_path
 
   summary_path="$(
-    find "$ROOT_DIR/benchmarkSSE/results/data" \
+    find "$SUMMARY_SEARCH_DIR" \
       -maxdepth 3 \
       -type f \
-      -name "search_latency_by_docs_summary.tsv" \
+      -name "$SUMMARY_FILENAME" \
       -newer "$marker_path" \
-      -path "*_r${replica_count}_f${fault_count}/search_latency_by_docs_summary.tsv" \
+      -path "*_r${sse_replicas}_o${oram_replicas}/${SUMMARY_FILENAME}" \
       -print |
       sort |
       tail -n 1
   )"
 
   if [[ -z "$summary_path" ]]; then
-    echo "Could not find summary for replicaCount=$replica_count f=$fault_count." >&2
+    echo "Could not find summary for SSE=$sse_replicas, ORAM=$oram_replicas." >&2
     exit 1
   fi
 
@@ -214,27 +252,30 @@ latest_summary_for_run() {
 }
 
 run_one_benchmark() {
-  local replica_count="$1"
-  local fault_count marker_path summary_path
+  local sse_replicas="$1"
+  local oram_replicas marker_path summary_path
 
-  fault_count="$(fault_count_for "$replica_count")"
-  marker_path="$(mktemp "$ROOT_DIR/benchmarkSSE/results/data/.replica_sweep_marker.XXXXXX")"
+  oram_replicas="${ORAM_REPLICAS_OVERRIDE:-$sse_replicas}"
+  marker_path="$(mktemp "$SWEEP_LOG_DIR/.summary_marker.XXXXXX")"
   {
     echo
-    echo "===== Running search latency benchmark with replicaCount=$replica_count f=$fault_count ====="
+    echo "===== Running search latency benchmark with SSE=$sse_replicas, ORAM=$oram_replicas ====="
   } | tee -a "$SWEEP_LOG_PATH"
 
-  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --sseReplicas "$replica_count" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
+  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --sseReplicas "$sse_replicas" --oramReplicas "$oram_replicas" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
     rm -f "$marker_path"
-    echo "Benchmark failed for replicaCount=$replica_count." >&2
+    echo "Benchmark failed for SSE=$sse_replicas, ORAM=$oram_replicas." >&2
     exit 1
   fi
 
-  summary_path="$(latest_summary_for_run "$marker_path" "$replica_count" "$fault_count")"
+  if ! summary_path="$(latest_summary_for_run "$marker_path" "$sse_replicas" "$oram_replicas")"; then
+    rm -f "$marker_path"
+    exit 1
+  fi
   rm -f "$marker_path"
   SUMMARY_PATHS+=("$summary_path")
 
-  echo "Summary for replicaCount=$replica_count: $summary_path" | tee -a "$SWEEP_LOG_PATH"
+  echo "Summary for SSE=$sse_replicas, ORAM=$oram_replicas: $summary_path" | tee -a "$SWEEP_LOG_PATH"
 }
 
 aggregate_results() {
@@ -250,8 +291,17 @@ generate_plots() {
 }
 
 verify_outputs() {
+  local expected_rows actual_rows
+
   if [[ ! -s "$SWEEP_SUMMARY_PATH" ]]; then
     echo "Aggregated summary is missing or empty: $SWEEP_SUMMARY_PATH" >&2
+    exit 1
+  fi
+
+  expected_rows=$(( ${#REPLICA_COUNTS[@]} * BUCKET_COUNT * N_METRICS ))
+  actual_rows=$(( $(wc -l < "$SWEEP_SUMMARY_PATH") - 1 ))
+  if (( actual_rows != expected_rows )); then
+    echo "Expected $expected_rows aggregate metric rows, found $actual_rows in $SWEEP_SUMMARY_PATH." >&2
     exit 1
   fi
 
@@ -264,6 +314,7 @@ verify_outputs() {
 main() {
   parse_args "$@"
   parse_replica_list
+  validate_oram_replicas
   ensure_file_exists "$DOCS_RUNNER"
   ensure_file_exists "$AGGREGATE_SCRIPT"
   ensure_file_exists "$GNUPLOT_SCRIPT"
@@ -271,11 +322,13 @@ main() {
   ensure_command_exists python3
   ensure_command_exists gnuplot
   load_bucket_config
+  load_summary_location
 
   SUMMARY_PATHS=()
 
   prepare_outputs
   echo "Replica sweep: ${REPLICA_COUNTS[*]}" | tee -a "$SWEEP_LOG_PATH"
+  echo "ORAM replicas: ${ORAM_REPLICAS_OVERRIDE:-follow SSE}" | tee -a "$SWEEP_LOG_PATH"
   echo "Config: $CONFIG_PATH" | tee -a "$SWEEP_LOG_PATH"
   echo "Buckets: $BUCKET_LIST" | tee -a "$SWEEP_LOG_PATH"
 
