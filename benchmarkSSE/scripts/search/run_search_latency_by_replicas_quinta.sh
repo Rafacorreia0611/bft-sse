@@ -7,9 +7,12 @@ source "$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/search_latency_by_docs.properties"
 DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
+# Matches METRICS in summarize_search_latency.py.
+N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
 REPLICA_LIST="4,7,10"
+ORAM_REPLICAS_OVERRIDE=""
 
 DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/search/run_search_latency_by_docs_quinta.sh"
 AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/aggregate_search_latency_by_replicas.py"
@@ -17,7 +20,8 @@ GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/search_latency_by_replicas
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [--config PATH] [--cluster-config PATH] [--replicas N[,N...]]
+Usage: $(basename "$0") [--config PATH] [--cluster-config PATH] [--sseReplicas N[,N...]] [--oramReplicas N]
+Without --oramReplicas, ORAM follows each SSE count; otherwise it stays fixed at N.
 EOF
 }
 
@@ -60,19 +64,37 @@ parse_args() {
         fi
         shift
         ;;
-      --replicas)
+      --sseReplicas)
         if [[ "$#" -lt 2 || "$2" == --* ]]; then
-          echo "Missing value for --replicas." >&2
+          echo "Missing value for --sseReplicas." >&2
           usage
           exit 1
         fi
         REPLICA_LIST="$2"
         shift 2
         ;;
-      --replicas=*)
-        REPLICA_LIST="${1#--replicas=}"
+      --sseReplicas=*)
+        REPLICA_LIST="${1#--sseReplicas=}"
         if [[ -z "$REPLICA_LIST" ]]; then
-          echo "Missing value for --replicas." >&2
+          echo "Missing value for --sseReplicas." >&2
+          usage
+          exit 1
+        fi
+        shift
+        ;;
+      --oramReplicas)
+        if [[ "$#" -lt 2 || -z "$2" || "$2" == --* ]]; then
+          echo "Missing value for --oramReplicas." >&2
+          usage
+          exit 1
+        fi
+        ORAM_REPLICAS_OVERRIDE="$2"
+        shift 2
+        ;;
+      --oramReplicas=*)
+        ORAM_REPLICAS_OVERRIDE="${1#--oramReplicas=}"
+        if [[ -z "$ORAM_REPLICAS_OVERRIDE" ]]; then
+          echo "Missing value for --oramReplicas." >&2
           usage
           exit 1
         fi
@@ -92,6 +114,33 @@ parse_args() {
 
   [[ "$CONFIG_PATH" = /* ]] || CONFIG_PATH="$ROOT_DIR/$CONFIG_PATH"
   [[ "$CLUSTER_CONFIG" = /* ]] || CLUSTER_CONFIG="$ROOT_DIR/$CLUSTER_CONFIG"
+  CONFIG_DIR="$(cd "$(dirname "$CONFIG_PATH")" && pwd)"
+}
+
+validate_oram_replicas() {
+  [[ -n "$ORAM_REPLICAS_OVERRIDE" ]] || return 0
+
+  if ! [[ "$ORAM_REPLICAS_OVERRIDE" =~ ^[0-9]+$ ]] || (( 10#$ORAM_REPLICAS_OVERRIDE < 4 )); then
+    echo "--oramReplicas must be an integer greater than or equal to 4." >&2
+    exit 1
+  fi
+}
+
+validate_sweep_capacity() {
+  local max_replicas sse_replicas oram_replicas
+
+  # shellcheck source=/dev/null
+  source "$CLUSTER_CONFIG"
+  [[ "${#QUINTA_NODES[@]}" -gt 0 ]] || die "QUINTA_NODES cannot be empty"
+  max_replicas=$((${#QUINTA_NODES[@]} - 1))
+
+  for sse_replicas in "${REPLICA_COUNTS[@]}"; do
+    oram_replicas="${ORAM_REPLICAS_OVERRIDE:-$sse_replicas}"
+    (( sse_replicas <= max_replicas )) \
+      || die "sseReplicas=$sse_replicas cannot run: one Quinta node must remain reserved for clients (maximum $max_replicas)"
+    (( oram_replicas <= max_replicas )) \
+      || die "oramReplicas=$oram_replicas cannot run with SSE=$sse_replicas: one Quinta node must remain reserved for clients (maximum $max_replicas)"
+  done
 }
 
 get_property() {
@@ -146,11 +195,21 @@ load_bucket_config() {
   esac
   BUCKET_SPECS="${BUCKET_LIST//,/ }"
   BUCKET_LABELS=""
+  BUCKET_COUNT=0
 
   for bucket in $BUCKET_SPECS; do
     [[ -z "$BUCKET_LABELS" ]] || BUCKET_LABELS+=" "
     BUCKET_LABELS+="${bucket/:/-}"
+    BUCKET_COUNT=$((BUCKET_COUNT + 1))
   done
+}
+
+load_summary_location() {
+  local summary_path
+
+  summary_path="$(resolve_config_path "$(get_property summaryOutputPath)")"
+  SUMMARY_SEARCH_DIR="$(dirname "$summary_path")"
+  SUMMARY_FILENAME="$(basename "$summary_path")"
 }
 
 prepare_outputs() {
@@ -167,24 +226,24 @@ prepare_outputs() {
 
 latest_summary_for_run() {
   local marker_path="$1"
-  local replica_count="$2"
-  local fault_count="$3"
+  local sse_replicas="$2"
+  local oram_replicas="$3"
   local summary_path
 
   summary_path="$(
-    find "$ROOT_DIR/benchmarkSSE/results/data" \
+    find "$SUMMARY_SEARCH_DIR" \
       -maxdepth 3 \
       -type f \
-      -name "search_latency_by_docs_summary.tsv" \
+      -name "$SUMMARY_FILENAME" \
       -newer "$marker_path" \
-      -path "*_r${replica_count}_f${fault_count}/search_latency_by_docs_summary.tsv" \
+      -path "*_r${sse_replicas}_o${oram_replicas}/${SUMMARY_FILENAME}" \
       -print |
       sort |
       tail -n 1
   )"
 
   if [[ -z "$summary_path" ]]; then
-    echo "Could not find summary for replicaCount=$replica_count f=$fault_count." >&2
+    echo "Could not find summary for SSE=$sse_replicas, ORAM=$oram_replicas." >&2
     exit 1
   fi
 
@@ -192,27 +251,35 @@ latest_summary_for_run() {
 }
 
 run_one_benchmark() {
-  local replica_count="$1"
-  local fault_count marker_path summary_path
+  local sse_replicas="$1"
+  local oram_replicas marker_path summary_path
 
-  fault_count="$(fault_count_for "$replica_count")"
-  marker_path="$(mktemp "$ROOT_DIR/benchmarkSSE/results/data/.quinta_replica_sweep_marker.XXXXXX")"
+  oram_replicas="${ORAM_REPLICAS_OVERRIDE:-$sse_replicas}"
+  marker_path="$(mktemp "$SWEEP_LOG_DIR/.summary_marker.XXXXXX")"
   {
     echo
-    echo "===== Running Quinta search latency benchmark with replicaCount=$replica_count f=$fault_count ====="
+    echo "===== Running Quinta search latency benchmark with SSE=$sse_replicas, ORAM=$oram_replicas ====="
   } | tee -a "$SWEEP_LOG_PATH"
 
-  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --cluster-config "$CLUSTER_CONFIG" --replicas "$replica_count" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
+  if ! "$DOCS_RUNNER" \
+      --config "$CONFIG_PATH" \
+      --cluster-config "$CLUSTER_CONFIG" \
+      --sseReplicas "$sse_replicas" \
+      --oramReplicas "$oram_replicas" \
+      2>&1 | tee -a "$SWEEP_LOG_PATH"; then
     rm -f "$marker_path"
-    echo "Benchmark failed for replicaCount=$replica_count." >&2
+    echo "Benchmark failed for SSE=$sse_replicas, ORAM=$oram_replicas." >&2
     exit 1
   fi
 
-  summary_path="$(latest_summary_for_run "$marker_path" "$replica_count" "$fault_count")"
+  if ! summary_path="$(latest_summary_for_run "$marker_path" "$sse_replicas" "$oram_replicas")"; then
+    rm -f "$marker_path"
+    exit 1
+  fi
   rm -f "$marker_path"
   SUMMARY_PATHS+=("$summary_path")
 
-  echo "Summary for replicaCount=$replica_count: $summary_path" | tee -a "$SWEEP_LOG_PATH"
+  echo "Summary for SSE=$sse_replicas, ORAM=$oram_replicas: $summary_path" | tee -a "$SWEEP_LOG_PATH"
 }
 
 aggregate_results() {
@@ -228,8 +295,17 @@ generate_plots() {
 }
 
 verify_outputs() {
+  local expected_rows actual_rows
+
   if [[ ! -s "$SWEEP_SUMMARY_PATH" ]]; then
     echo "Aggregated summary is missing or empty: $SWEEP_SUMMARY_PATH" >&2
+    exit 1
+  fi
+
+  expected_rows=$(( ${#REPLICA_COUNTS[@]} * BUCKET_COUNT * N_METRICS ))
+  actual_rows=$(( $(wc -l < "$SWEEP_SUMMARY_PATH") - 1 ))
+  if (( actual_rows != expected_rows )); then
+    echo "Expected $expected_rows aggregate metric rows, found $actual_rows in $SWEEP_SUMMARY_PATH." >&2
     exit 1
   fi
 
@@ -242,26 +318,30 @@ verify_outputs() {
 main() {
   parse_args "$@"
   parse_replica_list
+  validate_oram_replicas
   ensure_executable_exists "$DOCS_RUNNER"
   ensure_file_exists "$AGGREGATE_SCRIPT"
   ensure_file_exists "$GNUPLOT_SCRIPT"
   ensure_file_exists "$CONFIG_PATH"
   ensure_file_exists "$CLUSTER_CONFIG"
+  validate_sweep_capacity
   ensure_command_exists python3
   ensure_command_exists gnuplot
   load_bucket_config
+  load_summary_location
 
   SUMMARY_PATHS=()
 
   prepare_outputs
   echo "Quinta replica sweep: ${REPLICA_COUNTS[*]}" | tee -a "$SWEEP_LOG_PATH"
+  echo "ORAM replicas: ${ORAM_REPLICAS_OVERRIDE:-follow SSE}" | tee -a "$SWEEP_LOG_PATH"
   echo "Config: $CONFIG_PATH" | tee -a "$SWEEP_LOG_PATH"
   echo "Cluster config: $CLUSTER_CONFIG" | tee -a "$SWEEP_LOG_PATH"
   echo "Buckets: $BUCKET_LIST" | tee -a "$SWEEP_LOG_PATH"
 
-  local replica_count
-  for replica_count in "${REPLICA_COUNTS[@]}"; do
-    run_one_benchmark "$replica_count"
+  local sse_replicas
+  for sse_replicas in "${REPLICA_COUNTS[@]}"; do
+    run_one_benchmark "$sse_replicas"
   done
 
   aggregate_results

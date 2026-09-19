@@ -155,8 +155,10 @@ fault_count_for() {
 }
 
 client_node() {
-  local client_index="$1"
-  local node_index=$(((REPLICA_COUNT + client_index) % ${#QUINTA_NODES[@]}))
+  local node_index="$REPLICA_COUNT"
+  (( ORAM_REPLICA_COUNT <= node_index )) || node_index="$ORAM_REPLICA_COUNT"
+  (( node_index < ${#QUINTA_NODES[@]} )) \
+    || die "one Quinta node must remain reserved for clients"
   printf '%s%s\n' "$QUINTA_SSH_PREFIX" "${QUINTA_NODES[$node_index]}"
 }
 

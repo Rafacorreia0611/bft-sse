@@ -158,6 +158,7 @@ load_cluster_config() {
   fi
   validate_positive_integer "$ORAM_REPLICA_COUNT" "oramReplicas"
   [[ "$ORAM_REPLICA_COUNT" -ge 4 ]] || die "oramReplicas must be at least 4"
+  validate_replica_capacity
   validate_positive_integer "$ORAM_MAX_CONCURRENT_CLIENTS" "oramMaxConcurrentClients"
   validate_positive_integer "$CLIENT_COUNT" "clients"
   validate_positive_integer "$QUINTA_BASE_CLIENT_PORT" "QUINTA_BASE_CLIENT_PORT"
@@ -168,6 +169,16 @@ load_cluster_config() {
   [[ "$QUINTA_PORT_STEP" -ge 3 ]] || die "QUINTA_PORT_STEP must be at least 3 for SSE/ORAM replicas"
   validate_port_ranges
   [[ "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "run-name may only contain letters, numbers, dot, underscore, and dash"
+}
+
+validate_replica_capacity() {
+  local max_replicas
+  max_replicas=$((${#QUINTA_NODES[@]} - 1))
+
+  (( SSE_REPLICA_COUNT <= max_replicas )) \
+    || die "sseReplicas cannot exceed $max_replicas: one Quinta node must remain reserved for clients"
+  (( ORAM_REPLICA_COUNT <= max_replicas )) \
+    || die "oramReplicas cannot exceed $max_replicas: one Quinta node must remain reserved for clients"
 }
 
 validate_port_ranges() {
@@ -264,8 +275,8 @@ oram_replica_server_port() {
 }
 
 client_node() {
-  local client_index="$1"
-  local node_index=$(((SSE_REPLICA_COUNT + client_index) % $(node_count)))
+  local node_index="$SSE_REPLICA_COUNT"
+  (( ORAM_REPLICA_COUNT <= node_index )) || node_index="$ORAM_REPLICA_COUNT"
   printf '%s\n' "${QUINTA_NODES[$node_index]}"
 }
 
@@ -299,9 +310,6 @@ print_layout() {
   echo "Clients: $CLIENT_COUNT"
   echo "Remote root: $(remote_run_dir)"
   echo "Ports shown below are client/server; COBRA also uses server port + 1."
-  if (( SSE_REPLICA_COUNT > $(node_count) || ORAM_REPLICA_COUNT > $(node_count) )); then
-    echo "Notice: some nodes will run more than one replica of a service."
-  fi
   echo
   echo "SSE replicas:"
   for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
