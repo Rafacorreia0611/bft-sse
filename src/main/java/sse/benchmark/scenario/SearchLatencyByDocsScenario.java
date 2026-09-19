@@ -57,8 +57,12 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         );
         try {
             clientHandler.initializeState();
+            System.out.println("Running warm-up searches...");
             runWarmup(clientHandler, entriesByBucket, config);
+            System.out.println("Warm-up searches finished.");
+            System.out.println("Running measured searches...");
             runMeasurements(clientHandler, entriesByBucket, config, resultWriter);
+            System.out.println("Measured searches finished.");
         } finally {
             clientHandler.close();
             adapter.close();

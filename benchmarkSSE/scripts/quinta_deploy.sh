@@ -7,7 +7,9 @@ DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 
 COMMAND=""
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
-REPLICA_COUNT=10
+SSE_REPLICA_COUNT=10
+ORAM_REPLICA_COUNT=-1
+ORAM_MAX_CONCURRENT_CLIENTS=1
 CLIENT_COUNT=1
 RUN_NAME="latest"
 
@@ -17,6 +19,7 @@ Usage: $(basename "$0") <command> [options]
 
 Commands:
   layout      Show replica/client placement.
+  prepare-local  Build and validate local deploy folders without contacting Quinta.
   preflight   Check SSH, Java, IPs, disk, and relevant ports.
   deploy      Build local deploy, configure it, and copy it to Quinta.
   start       Start remote replicas.
@@ -28,7 +31,9 @@ Commands:
 
 Options:
   --cluster-config PATH  Default: benchmarkSSE/config/quinta.env
-  --replicas N           Default: 10
+  --sseReplicas N        Default: 10
+  --oramReplicas N       Default: match SSE
+  --oramMaxConcurrentClients N  Default: 1
   --clients N            Default: 1
   --run-name NAME        Default: latest
 EOF
@@ -75,14 +80,34 @@ parse_args() {
         [[ -n "$CLUSTER_CONFIG" ]] || die "Missing value for --cluster-config"
         shift
         ;;
-      --replicas)
-        [[ "$#" -ge 2 ]] || die "Missing value for --replicas"
-        REPLICA_COUNT="$2"
+      --sseReplicas)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --sseReplicas"
+        SSE_REPLICA_COUNT="$2"
         shift 2
         ;;
-      --replicas=*)
-        REPLICA_COUNT="${1#--replicas=}"
-        [[ -n "$REPLICA_COUNT" ]] || die "Missing value for --replicas"
+      --sseReplicas=*)
+        SSE_REPLICA_COUNT="${1#--sseReplicas=}"
+        [[ -n "$SSE_REPLICA_COUNT" ]] || die "Missing value for --sseReplicas"
+        shift
+        ;;
+      --oramReplicas)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --oramReplicas"
+        ORAM_REPLICA_COUNT="$2"
+        shift 2
+        ;;
+      --oramReplicas=*)
+        ORAM_REPLICA_COUNT="${1#--oramReplicas=}"
+        [[ -n "$ORAM_REPLICA_COUNT" ]] || die "Missing value for --oramReplicas"
+        shift
+        ;;
+      --oramMaxConcurrentClients)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --oramMaxConcurrentClients"
+        ORAM_MAX_CONCURRENT_CLIENTS="$2"
+        shift 2
+        ;;
+      --oramMaxConcurrentClients=*)
+        ORAM_MAX_CONCURRENT_CLIENTS="${1#--oramMaxConcurrentClients=}"
+        [[ -n "$ORAM_MAX_CONCURRENT_CLIENTS" ]] || die "Missing value for --oramMaxConcurrentClients"
         shift
         ;;
       --clients)
@@ -126,10 +151,37 @@ load_cluster_config() {
 
   [[ "${#QUINTA_NODES[@]}" -gt 0 ]] || die "QUINTA_NODES cannot be empty"
   [[ "${#QUINTA_NODES[@]}" -eq "${#QUINTA_NODE_IPS[@]}" ]] || die "QUINTA_NODES and QUINTA_NODE_IPS must have the same length"
-  validate_positive_integer "$REPLICA_COUNT" "replicas"
+  validate_positive_integer "$SSE_REPLICA_COUNT" "sseReplicas"
+  [[ "$SSE_REPLICA_COUNT" -ge 4 ]] || die "sseReplicas must be at least 4"
+  if [[ "$ORAM_REPLICA_COUNT" == "-1" ]]; then
+    ORAM_REPLICA_COUNT="$SSE_REPLICA_COUNT"
+  fi
+  validate_positive_integer "$ORAM_REPLICA_COUNT" "oramReplicas"
+  [[ "$ORAM_REPLICA_COUNT" -ge 4 ]] || die "oramReplicas must be at least 4"
+  validate_positive_integer "$ORAM_MAX_CONCURRENT_CLIENTS" "oramMaxConcurrentClients"
   validate_positive_integer "$CLIENT_COUNT" "clients"
-  [[ "$REPLICA_COUNT" -ge 4 ]] || die "replicas must be at least 4"
+  validate_positive_integer "$QUINTA_BASE_CLIENT_PORT" "QUINTA_BASE_CLIENT_PORT"
+  validate_positive_integer "$QUINTA_ORAM_BASE_CLIENT_PORT" "QUINTA_ORAM_BASE_CLIENT_PORT"
+  validate_positive_integer "$QUINTA_PORT_STEP" "QUINTA_PORT_STEP"
+  validate_positive_integer "$QUINTA_TTP_PORT" "QUINTA_TTP_PORT"
+  validate_positive_integer "$QUINTA_ORAM_TTP_PORT" "QUINTA_ORAM_TTP_PORT"
+  [[ "$QUINTA_PORT_STEP" -ge 3 ]] || die "QUINTA_PORT_STEP must be at least 3 for SSE/ORAM replicas"
+  validate_port_ranges
   [[ "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "run-name may only contain letters, numbers, dot, underscore, and dash"
+}
+
+validate_port_ranges() {
+  local node_count_value="${#QUINTA_NODES[@]}"
+  local sse_last_port oram_last_port
+
+  # COBRA also listens one port after the replica-to-replica port.
+  sse_last_port=$((QUINTA_BASE_CLIENT_PORT + ((SSE_REPLICA_COUNT - 1) / node_count_value) * QUINTA_PORT_STEP + 2))
+  oram_last_port=$((QUINTA_ORAM_BASE_CLIENT_PORT + ((ORAM_REPLICA_COUNT - 1) / node_count_value) * QUINTA_PORT_STEP + 2))
+
+  (( sse_last_port < QUINTA_TTP_PORT && QUINTA_TTP_PORT < QUINTA_ORAM_BASE_CLIENT_PORT )) \
+    || die "SSE replica, SSE TTP, and ORAM port ranges overlap"
+  (( oram_last_port < QUINTA_ORAM_TTP_PORT && QUINTA_ORAM_TTP_PORT <= 65535 )) \
+    || die "ORAM replica and ORAM TTP port ranges overlap or exceed 65535"
 }
 
 validate_positive_integer() {
@@ -142,13 +194,27 @@ node_count() {
   printf '%s\n' "${#QUINTA_NODES[@]}"
 }
 
+node_ip() {
+  local node="$1"
+  local node_index
+  for node_index in "${!QUINTA_NODES[@]}"; do
+    if [[ "${QUINTA_NODES[$node_index]}" == "$node" ]]; then
+      printf '%s\n' "${QUINTA_NODE_IPS[$node_index]}"
+      return
+    fi
+  done
+  die "Unknown Quinta node: $node"
+}
+
 fault_count() {
-  printf '%s\n' $(((REPLICA_COUNT - 1) / 3))
+  local replica_count="${1:-$SSE_REPLICA_COUNT}"
+  printf '%s\n' $(((replica_count - 1) / 3))
 }
 
 initial_view() {
+  local replica_count="${1:-$SSE_REPLICA_COUNT}"
   local replica_id view=""
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  for (( replica_id = 0; replica_id < replica_count; replica_id++ )); do
     [[ -z "$view" ]] || view+=","
     view+="$replica_id"
   done
@@ -187,9 +253,19 @@ replica_server_port() {
   printf '%s\n' $(($(replica_client_port "$1") + 1))
 }
 
+oram_replica_client_port() {
+  local slot
+  slot="$(replica_slot_on_node "$1")"
+  printf '%s\n' $((QUINTA_ORAM_BASE_CLIENT_PORT + slot * QUINTA_PORT_STEP))
+}
+
+oram_replica_server_port() {
+  printf '%s\n' $(($(oram_replica_client_port "$1") + 1))
+}
+
 client_node() {
   local client_index="$1"
-  local node_index=$(((REPLICA_COUNT + client_index) % $(node_count)))
+  local node_index=$(((SSE_REPLICA_COUNT + client_index) % $(node_count)))
   printf '%s\n' "${QUINTA_NODES[$node_index]}"
 }
 
@@ -205,6 +281,10 @@ remote_replica_dir() {
   printf '%s/rep%s\n' "$(remote_run_dir)" "$1"
 }
 
+remote_oram_replica_dir() {
+  printf '%s/oramRep%s\n' "$(remote_run_dir)" "$1"
+}
+
 remote_client_dir() {
   printf '%s/cli%s\n' "$(remote_run_dir)" "$1"
 }
@@ -213,18 +293,28 @@ print_layout() {
   local replica_id client_index
 
   echo "Run: $RUN_NAME"
-  echo "Replicas: $REPLICA_COUNT (f=$(fault_count))"
+  echo "SSE replicas: $SSE_REPLICA_COUNT (f=$(fault_count))"
+  echo "ORAM replicas: $ORAM_REPLICA_COUNT"
+  echo "ORAM max concurrent clients: $ORAM_MAX_CONCURRENT_CLIENTS"
   echo "Clients: $CLIENT_COUNT"
   echo "Remote root: $(remote_run_dir)"
-  if (( REPLICA_COUNT > $(node_count) )); then
-    echo "Notice: $REPLICA_COUNT replicas over $(node_count) nodes; some nodes will run more than one replica."
+  echo "Ports shown below are client/server; COBRA also uses server port + 1."
+  if (( SSE_REPLICA_COUNT > $(node_count) || ORAM_REPLICA_COUNT > $(node_count) )); then
+    echo "Notice: some nodes will run more than one replica of a service."
   fi
   echo
-  echo "Replicas:"
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  echo "SSE replicas:"
+  for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
     printf '  rep%-3s -> %-4s %-13s %s/%s\n' \
       "$replica_id" "$(replica_node "$replica_id")" "$(replica_ip "$replica_id")" \
       "$(replica_client_port "$replica_id")" "$(replica_server_port "$replica_id")"
+  done
+  echo
+  echo "ORAM replicas:"
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    printf '  oramRep%-3s -> %-4s %-13s %s/%s\n' \
+      "$replica_id" "$(replica_node "$replica_id")" "$(replica_ip "$replica_id")" \
+      "$(oram_replica_client_port "$replica_id")" "$(oram_replica_server_port "$replica_id")"
   done
   echo
   echo "Clients:"
@@ -235,11 +325,12 @@ print_layout() {
 
 write_system_config() {
   local path="$1"
+  local replica_count="$2"
   local tmp_path="${path}.tmp"
   awk \
-    -v replica_count="$REPLICA_COUNT" \
-    -v fault_count_value="$(fault_count)" \
-    -v initial_view_value="$(initial_view)" \
+    -v replica_count="$replica_count" \
+    -v fault_count_value="$(fault_count "$replica_count")" \
+    -v initial_view_value="$(initial_view "$replica_count")" \
     '
       /^system\.servers\.num[[:space:]]*=/ {
         print "system.servers.num = " replica_count
@@ -260,36 +351,53 @@ write_system_config() {
 
 write_hosts_config() {
   local path="$1"
-  local replica_id
+  local replica_count="$2"
+  local base_port="$3"
+  local ttp_port="$4"
+  local replica_id slot client_port
   {
     printf '# Generated by quinta_deploy.sh for run %s.\n' "$RUN_NAME"
     printf '#server id, address and port (the ids from 0 to n-1 are the service replicas)\n'
-    for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+    for (( replica_id = 0; replica_id < replica_count; replica_id++ )); do
+      slot="$(replica_slot_on_node "$replica_id")"
+      client_port=$((base_port + slot * QUINTA_PORT_STEP))
       printf '%s %s %s %s\n' \
         "$replica_id" "$(replica_ip "$replica_id")" \
-        "$(replica_client_port "$replica_id")" "$(replica_server_port "$replica_id")"
+        "$client_port" "$((client_port + 1))"
     done
-    printf '\n7001 %s %s\n' "$QUINTA_TTP_IP" "$QUINTA_TTP_PORT"
+    printf '\n7002 %s %s\n' "$QUINTA_TTP_IP" "$ttp_port"
   } > "$path"
 }
 
 configure_local_deploy() {
   local deploy_dir deploy_index
 
-  for (( deploy_index = 0; deploy_index < REPLICA_COUNT; deploy_index++ )); do
+  for (( deploy_index = 0; deploy_index < SSE_REPLICA_COUNT; deploy_index++ )); do
     deploy_dir="$ROOT_DIR/build/local/rep${deploy_index}"
     [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
-    repair_local_deploy_from_reference "$deploy_dir"
-    write_system_config "$deploy_dir/config/system.config"
-    write_hosts_config "$deploy_dir/config/hosts.config"
+    repair_local_deploy_from_reference "$deploy_dir" "$ROOT_DIR/config"
+    write_system_config "$deploy_dir/config/system.config" "$SSE_REPLICA_COUNT"
+    write_hosts_config "$deploy_dir/config/hosts.config" "$SSE_REPLICA_COUNT" "$QUINTA_BASE_CLIENT_PORT" "$QUINTA_TTP_PORT"
+  done
+
+  for (( deploy_index = 0; deploy_index < ORAM_REPLICA_COUNT; deploy_index++ )); do
+    deploy_dir="$ROOT_DIR/build/local/oramRep${deploy_index}"
+    [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
+    repair_local_deploy_from_reference "$deploy_dir" "$ROOT_DIR/oram_config"
+    write_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT"
+    write_hosts_config "$deploy_dir/config/hosts.config" "$ORAM_REPLICA_COUNT" "$QUINTA_ORAM_BASE_CLIENT_PORT" "$QUINTA_ORAM_TTP_PORT"
   done
 
   for (( deploy_index = 0; deploy_index < CLIENT_COUNT; deploy_index++ )); do
     deploy_dir="$ROOT_DIR/build/local/cli${deploy_index}"
     [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
-    repair_local_deploy_from_reference "$deploy_dir"
-    write_system_config "$deploy_dir/config/system.config"
-    write_hosts_config "$deploy_dir/config/hosts.config"
+    repair_local_deploy_from_reference "$deploy_dir" "$ROOT_DIR/oram_config"
+    mkdir -p "$deploy_dir/sse_config"
+    cp -R "$ROOT_DIR/config/." "$deploy_dir/sse_config/"
+    write_system_config "$deploy_dir/sse_config/system.config" "$SSE_REPLICA_COUNT"
+    write_hosts_config "$deploy_dir/sse_config/hosts.config" "$SSE_REPLICA_COUNT" "$QUINTA_BASE_CLIENT_PORT" "$QUINTA_TTP_PORT"
+    write_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT"
+    write_hosts_config "$deploy_dir/config/hosts.config" "$ORAM_REPLICA_COUNT" "$QUINTA_ORAM_BASE_CLIENT_PORT" "$QUINTA_ORAM_TTP_PORT"
   done
 }
 
@@ -310,6 +418,7 @@ validate_source_inputs() {
 
   for required_path in \
     config \
+    oram_config \
     pairing \
     scripts \
     lib \
@@ -320,6 +429,12 @@ validate_source_inputs() {
     config/keysECDSA/publickey1001 \
     config/keysRSA/publickey1001 \
     config/keysSunEC/publickey1001 \
+    oram_config/system.config \
+    oram_config/hosts.config \
+    oram_config/keysSSL_TLS/EC_KeyPair_256.pkcs12 \
+    oram_config/keysECDSA/publickey1001 \
+    oram_config/keysRSA/publickey1001 \
+    oram_config/keysSunEC/publickey1001 \
     pairing/relic/relic.zip \
     scripts/smartrun.sh; do
     [[ -e "$ROOT_DIR/$required_path" ]] || die "Missing source deploy path: $ROOT_DIR/$required_path"
@@ -343,22 +458,37 @@ deploy_jar_count() {
 
 repair_local_deploy_from_reference() {
   local deploy_dir="$1"
+  local config_source_dir="$2"
   local reference_dir
 
   reference_dir="$(reference_deploy_dir)"
   [[ -d "$reference_dir" ]] || die "Missing reference deploy directory: $reference_dir"
-  [[ -d "$ROOT_DIR/config" ]] || die "Missing config source directory: $ROOT_DIR/config"
+  [[ -d "$config_source_dir" ]] || die "Missing config source directory: $config_source_dir"
 
   mkdir -p "$deploy_dir"
   cp -R "$reference_dir/." "$deploy_dir/"
   rm -rf "$deploy_dir/config"
   mkdir -p "$deploy_dir/config"
-  cp -R "$ROOT_DIR/config/." "$deploy_dir/config/"
+  cp -R "$config_source_dir/." "$deploy_dir/config/"
+}
+
+validate_config_copy() {
+  local target_dir="$1"
+  local source_dir="$2"
+  local source_path relative_path
+
+  [[ -d "$target_dir" ]] || die "Missing local config directory: $target_dir"
+  while IFS= read -r source_path; do
+    relative_path="${source_path#"$source_dir/"}"
+    [[ -e "$target_dir/$relative_path" ]] \
+      || die "Missing local deploy copy of source config: $target_dir/$relative_path"
+  done < <(find "$source_dir" -type f)
 }
 
 validate_one_local_deploy() {
   local deploy_dir="$1"
   local expected_source_jars="$2"
+  local config_source_dir="$3"
   local actual_jars required_path source_path relative_path target_path
 
   [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
@@ -377,11 +507,7 @@ validate_one_local_deploy() {
     [[ -e "$deploy_dir/$required_path" ]] || die "Missing local deploy path: $deploy_dir/$required_path"
   done
 
-  while IFS= read -r source_path; do
-    relative_path="${source_path#"$ROOT_DIR/config/"}"
-    [[ -e "$deploy_dir/config/$relative_path" ]] \
-      || die "Missing local deploy copy of source config: $deploy_dir/config/$relative_path"
-  done < <(find "$ROOT_DIR/config" -type f)
+  validate_config_copy "$deploy_dir/config" "$config_source_dir"
 
   while IFS= read -r source_path; do
     relative_path="${source_path#"$ROOT_DIR/pairing/"}"
@@ -415,50 +541,48 @@ validate_one_local_deploy() {
     || die "$deploy_dir/lib has $actual_jars jars; expected at least $expected_source_jars source/project jars"
 }
 
-remote_file_count() {
-  local host="$1"
-  local remote_target="$2"
-  ssh_remote "$host" "find '$remote_target' -type f | wc -l | tr -d ' '"
-}
-
-remote_jar_count() {
-  local host="$1"
-  local remote_target="$2"
-  ssh_remote "$host" "find '$remote_target/lib' -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d ' '"
-}
-
 validate_remote_deploy() {
   local local_dir="$1"
   local host="$2"
   local remote_target="$3"
-  local expected_files expected_jars actual_files actual_jars required_path
+  local expected_files expected_jars client_checks=""
 
   expected_files="$(deploy_file_count "$local_dir")"
   expected_jars="$(deploy_jar_count "$local_dir")"
 
-  for required_path in \
-    "$remote_target" \
-    "$remote_target/config" \
-    "$remote_target/lib" \
-    "$remote_target/pairing" \
-    "$remote_target/smartrun.sh" \
-    "$remote_target/config/system.config" \
-    "$remote_target/config/hosts.config" \
-    "$remote_target/config/keysSSL_TLS/EC_KeyPair_256.pkcs12" \
-    "$remote_target/config/keysECDSA/publickey1001" \
-    "$remote_target/config/keysRSA/publickey1001" \
-    "$remote_target/config/keysSunEC/publickey1001"; do
-    ssh_remote "$host" "test -e '$required_path'" \
-      || { echo "Remote deploy missing required path: $host:$required_path" >&2; return 1; }
-  done
+  if [[ "$(basename "$local_dir")" == cli* ]]; then
+    local required_path
+    for required_path in \
+      sse_config/system.config \
+      sse_config/hosts.config \
+      datasets/vocabulary/vocabulary.txt; do
+      [[ -s "$local_dir/$required_path" ]] \
+        || { echo "Local client deploy missing file: $local_dir/$required_path" >&2; return 1; }
+      client_checks+=" test -s '$remote_target/$required_path' || { echo 'Remote client deploy missing file: $remote_target/$required_path' >&2; exit 1; };"
+    done
+  fi
 
-  actual_files="$(remote_file_count "$host" "$remote_target")"
-  [[ "$actual_files" -eq "$expected_files" ]] \
-    || { echo "$host:$remote_target has $actual_files files; expected $expected_files" >&2; return 1; }
-
-  actual_jars="$(remote_jar_count "$host" "$remote_target")"
-  [[ "$actual_jars" -eq "$expected_jars" ]] \
-    || { echo "$host:$remote_target/lib has $actual_jars jars; expected $expected_jars" >&2; return 1; }
+  ssh_remote "$host" "
+    for required_path in \
+      '$remote_target' \
+      '$remote_target/config' \
+      '$remote_target/lib' \
+      '$remote_target/pairing' \
+      '$remote_target/smartrun.sh' \
+      '$remote_target/config/system.config' \
+      '$remote_target/config/hosts.config' \
+      '$remote_target/config/keysSSL_TLS/EC_KeyPair_256.pkcs12' \
+      '$remote_target/config/keysECDSA/publickey1001' \
+      '$remote_target/config/keysRSA/publickey1001' \
+      '$remote_target/config/keysSunEC/publickey1001'; do
+      test -e \"\$required_path\" || { echo \"Remote deploy missing required path: \$required_path\" >&2; exit 1; }
+    done;
+    $client_checks
+    actual_files=\$(find '$remote_target' -type f | wc -l | tr -d ' ');
+    test \"\$actual_files\" -eq '$expected_files' || { echo '$remote_target has' \"\$actual_files\" 'files; expected $expected_files' >&2; exit 1; };
+    actual_jars=\$(find '$remote_target/lib' -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d ' ');
+    test \"\$actual_jars\" -eq '$expected_jars' || { echo '$remote_target/lib has' \"\$actual_jars\" 'jars; expected $expected_jars' >&2; exit 1; }
+  "
 }
 
 copy_local_deploy_dir() {
@@ -484,29 +608,39 @@ validate_local_deploy() {
   validate_source_inputs
   expected_source_jars="$(expected_source_jar_count)"
 
-  for (( deploy_index = 0; deploy_index < REPLICA_COUNT; deploy_index++ )); do
-    validate_one_local_deploy "$ROOT_DIR/build/local/rep${deploy_index}" "$expected_source_jars"
+  for (( deploy_index = 0; deploy_index < SSE_REPLICA_COUNT; deploy_index++ )); do
+    validate_one_local_deploy "$ROOT_DIR/build/local/rep${deploy_index}" "$expected_source_jars" "$ROOT_DIR/config"
+  done
+  for (( deploy_index = 0; deploy_index < ORAM_REPLICA_COUNT; deploy_index++ )); do
+    validate_one_local_deploy "$ROOT_DIR/build/local/oramRep${deploy_index}" "$expected_source_jars" "$ROOT_DIR/oram_config"
   done
   for (( deploy_index = 0; deploy_index < CLIENT_COUNT; deploy_index++ )); do
-    validate_one_local_deploy "$ROOT_DIR/build/local/cli${deploy_index}" "$expected_source_jars"
+    validate_one_local_deploy "$ROOT_DIR/build/local/cli${deploy_index}" "$expected_source_jars" "$ROOT_DIR/oram_config"
+    validate_config_copy "$ROOT_DIR/build/local/cli${deploy_index}/sse_config" "$ROOT_DIR/config"
+    [[ -s "$ROOT_DIR/build/local/cli${deploy_index}/datasets/vocabulary/vocabulary.txt" ]] \
+      || die "Missing client vocabulary: build/local/cli${deploy_index}/datasets/vocabulary/vocabulary.txt"
   done
+}
+
+prepare_local_deploy() {
+  echo "Preparing local deploy..."
+  (
+    cd "$ROOT_DIR"
+    ./gradlew --no-daemon --no-watch-fs clean localDeploy -Pservers="$SSE_REPLICA_COUNT" -PoramServers="$ORAM_REPLICA_COUNT" -Pclients="$CLIENT_COUNT"
+  )
+  configure_local_deploy
+  validate_local_deploy
 }
 
 deploy() {
   local replica_id client_index node host remote_dir
 
-  echo "Preparing local deploy..."
-  (
-    cd "$ROOT_DIR"
-    ./gradlew --no-daemon --no-watch-fs clean localDeploy -Pservers="$REPLICA_COUNT" -Pclients="$CLIENT_COUNT"
-  )
-  configure_local_deploy
-  validate_local_deploy
+  prepare_local_deploy
 
   print_layout
 
   echo "Stopping previous processes for this run..."
-  stop || true
+  stop
 
   echo "Preparing remote directories..."
   for node in "${QUINTA_NODES[@]}"; do
@@ -515,12 +649,21 @@ deploy() {
   done
 
   echo "Copying replicas..."
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
     node="$(replica_node "$replica_id")"
     host="$(ssh_host "$node")"
     remote_dir="$(remote_run_dir)"
     echo "  rep$replica_id -> $host"
     copy_local_deploy_dir "$ROOT_DIR/build/local/rep${replica_id}" "$host" "$remote_dir"
+  done
+
+  echo "Copying ORAM replicas..."
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    node="$(replica_node "$replica_id")"
+    host="$(ssh_host "$node")"
+    remote_dir="$(remote_run_dir)"
+    echo "  oramRep$replica_id -> $host"
+    copy_local_deploy_dir "$ROOT_DIR/build/local/oramRep${replica_id}" "$host" "$remote_dir"
   done
 
   echo "Copying clients..."
@@ -534,7 +677,7 @@ deploy() {
 }
 
 preflight() {
-  local node host expected_ip java_output java_major replica_id ports port
+  local node host expected_ip ports
 
   print_layout
   echo
@@ -544,36 +687,64 @@ preflight() {
     expected_ip="${QUINTA_NODE_IPS[$node_index]}"
     host="$(ssh_host "$node")"
     echo "=== $host ==="
-    ssh_remote "$host" "echo whoami=\$(whoami); hostname; ip -4 addr | grep -q '$expected_ip' && echo ip-ok=$expected_ip || echo ip-missing=$expected_ip; df -h / | tail -n 1"
-    java_output="$(ssh_remote "$host" "java -version 2>&1 | head -n 1" || true)"
-    echo "$java_output"
-    java_major="$(printf '%s\n' "$java_output" | sed -n 's/.*version \"\([0-9][0-9]*\).*/\1/p')"
-    [[ "$java_major" == "$QUINTA_REQUIRED_JAVA_MAJOR" ]] || die "$host has Java '$java_output', expected major $QUINTA_REQUIRED_JAVA_MAJOR"
-
-    ports=""
-    for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
-      if [[ "$(replica_node "$replica_id")" == "$node" ]]; then
-        ports+=" $(replica_client_port "$replica_id") $(replica_server_port "$replica_id")"
-      fi
-    done
-    for port in $ports; do
-      if ssh_remote "$host" "ss -ltn | grep -q ':$port '" >/dev/null 2>&1; then
-        die "$host has port $port in use"
-      fi
-    done
+    ports="$(run_ports_for_node "$node")"
+    if [[ "$expected_ip" == "$QUINTA_TTP_IP" ]]; then
+      ports+=" $QUINTA_TTP_PORT $QUINTA_ORAM_TTP_PORT"
+    fi
+    ssh_remote "$host" "
+      echo whoami=\$(whoami);
+      hostname;
+      ip -4 addr | grep -q '$expected_ip' || { echo 'Expected IP $expected_ip was not found' >&2; exit 1; };
+      echo ip-ok=$expected_ip;
+      df -h / | tail -n 1;
+      java_output=\$(java -version 2>&1 | head -n 1) || { echo 'Java is not installed' >&2; exit 1; };
+      echo \"\$java_output\";
+      java_major=\$(printf '%s\n' \"\$java_output\" | sed -n 's/.*version \"\([0-9][0-9]*\).*/\1/p');
+      test \"\$java_major\" = '$QUINTA_REQUIRED_JAVA_MAJOR' || { echo \"Expected Java $QUINTA_REQUIRED_JAVA_MAJOR, found \$java_output\" >&2; exit 1; };
+      command -v ss >/dev/null || { echo 'ss is not installed' >&2; exit 1; };
+      listeners=\$(ss -ltn) || exit 1;
+      for port in $ports; do
+        if printf '%s\n' \"\$listeners\" | grep -q \":\$port \"; then
+          echo \"Port \$port is already in use\" >&2;
+          exit 1;
+        fi;
+      done
+    " || die "Preflight failed on $host"
   done
 }
 
 start() {
   local replica_id node host remote_dir
 
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  echo "Starting ORAM replicas..."
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    node="$(replica_node "$replica_id")"
+    host="$(ssh_host "$node")"
+    remote_dir="$(remote_oram_replica_dir "$replica_id")"
+    echo "Starting oramRep$replica_id on $host"
+    ssh_remote -f "$host" "cd '$remote_dir' && { nohup env JAVA_OPTS='$QUINTA_ORAM_REPLICA_JAVA_OPTS' bash smartrun.sh oram.server.ORAMServer '$ORAM_MAX_CONCURRENT_CLIENTS' '$replica_id' > server.log 2>&1 < /dev/null & echo \$! > server.pid; }"
+  done
+
+  echo "Starting SSE replicas..."
+  for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
     node="$(replica_node "$replica_id")"
     host="$(ssh_host "$node")"
     remote_dir="$(remote_replica_dir "$replica_id")"
     echo "Starting rep$replica_id on $host"
-    ssh_remote -f "$host" "cd '$remote_dir' && nohup env JAVA_OPTS='$QUINTA_REPLICA_JAVA_OPTS' bash smartrun.sh sse.demo.server.Server $replica_id > server.log 2>&1 < /dev/null & echo \$! > server.pid"
+    ssh_remote -f "$host" "cd '$remote_dir' && { nohup env JAVA_OPTS='$QUINTA_REPLICA_JAVA_OPTS' bash smartrun.sh sse.demo.server.Server '$replica_id' > server.log 2>&1 < /dev/null & echo \$! > server.pid; }"
   done
+}
+
+remote_replica_ready() {
+  local host="$1"
+  local remote_dir="$2"
+  ssh_remote "$host" "test -s '$remote_dir/server.pid' && pid=\$(cat '$remote_dir/server.pid') && [[ \"\$pid\" =~ ^[0-9]+\$ ]] && [[ \$(readlink -f /proc/\$pid/cwd 2>/dev/null) == '$remote_dir' ]] && kill -0 \"\$pid\" 2>/dev/null && grep -q 'Ready to process operations' '$remote_dir/server.log' 2>/dev/null" >/dev/null 2>&1
+}
+
+remote_replica_alive() {
+  local host="$1"
+  local remote_dir="$2"
+  ssh_remote "$host" "test -s '$remote_dir/server.pid' && pid=\$(cat '$remote_dir/server.pid') && [[ \"\$pid\" =~ ^[0-9]+\$ ]] && [[ \$(readlink -f /proc/\$pid/cwd 2>/dev/null) == '$remote_dir' ]] && kill -0 \"\$pid\" 2>/dev/null" >/dev/null 2>&1
 }
 
 wait_ready() {
@@ -583,11 +754,30 @@ wait_ready() {
   echo "Waiting up to ${QUINTA_READY_TIMEOUT_SECONDS}s for replicas..."
   while (( SECONDS < deadline )); do
     ready=1
-    for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+    for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+      node="$(replica_node "$replica_id")"
+      host="$(ssh_host "$node")"
+      remote_dir="$(remote_oram_replica_dir "$replica_id")"
+      if ! remote_replica_ready "$host" "$remote_dir"; then
+        if ! remote_replica_alive "$host" "$remote_dir"; then
+          echo "$host oramRep$replica_id exited before becoming ready." >&2
+          status >&2 || true
+          return 1
+        fi
+        ready=0
+        break
+      fi
+    done
+    for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
       node="$(replica_node "$replica_id")"
       host="$(ssh_host "$node")"
       remote_dir="$(remote_replica_dir "$replica_id")"
-      if ! ssh_remote "$host" "grep -q 'Ready to process operations' '$remote_dir/server.log' 2>/dev/null" >/dev/null 2>&1; then
+      if ! remote_replica_ready "$host" "$remote_dir"; then
+        if ! remote_replica_alive "$host" "$remote_dir"; then
+          echo "$host rep$replica_id exited before becoming ready." >&2
+          status >&2 || true
+          return 1
+        fi
         ready=0
         break
       fi
@@ -607,83 +797,115 @@ wait_ready() {
 status() {
   local replica_id node host remote_dir
 
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    node="$(replica_node "$replica_id")"
+    host="$(ssh_host "$node")"
+    remote_dir="$(remote_oram_replica_dir "$replica_id")"
+    echo "=== $host oramRep$replica_id ==="
+    ssh_remote "$host" "if test -s '$remote_dir/server.pid'; then pid=\$(cat '$remote_dir/server.pid'); ps -p \"\$pid\" -o pid=,args= || echo 'not running'; else echo 'no server.pid'; fi; grep -n 'Ready to process operations' '$remote_dir/server.log' 2>/dev/null || tail -n 20 '$remote_dir/server.log' 2>/dev/null || echo 'no server.log'"
+  done
+  for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
     node="$(replica_node "$replica_id")"
     host="$(ssh_host "$node")"
     remote_dir="$(remote_replica_dir "$replica_id")"
     echo "=== $host rep$replica_id ==="
-    ssh_remote "$host" "pgrep -af '[s]se.demo.server.Server $replica_id' || echo 'not running'; grep -n 'Ready to process operations' '$remote_dir/server.log' 2>/dev/null || tail -n 20 '$remote_dir/server.log' 2>/dev/null || echo 'no server.log'"
+    ssh_remote "$host" "if test -s '$remote_dir/server.pid'; then pid=\$(cat '$remote_dir/server.pid'); ps -p \"\$pid\" -o pid=,args= || echo 'not running'; else echo 'no server.pid'; fi; grep -n 'Ready to process operations' '$remote_dir/server.log' 2>/dev/null || tail -n 20 '$remote_dir/server.log' 2>/dev/null || echo 'no server.log'"
   done
 }
 
-ports_for_node() {
+run_ports_for_node() {
   local node="$1"
-  local replica_id ports=""
+  local replica_id client_port ports=""
 
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
+  for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
     if [[ "$(replica_node "$replica_id")" == "$node" ]]; then
-      ports+=" $(replica_client_port "$replica_id") $(replica_server_port "$replica_id")"
+      client_port="$(replica_client_port "$replica_id")"
+      ports+=" $client_port $((client_port + 1)) $((client_port + 2))"
     fi
   done
-
+  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
+    if [[ "$(replica_node "$replica_id")" == "$node" ]]; then
+      client_port="$(oram_replica_client_port "$replica_id")"
+      ports+=" $client_port $((client_port + 1)) $((client_port + 2))"
+    fi
+  done
   printf '%s\n' "$ports"
 }
 
-kill_current_run_listener_on_port() {
+stop_current_run_processes() {
   local host="$1"
-  local port="$2"
-  local signal="$3"
+  local signal="$2"
+  local show_listeners="${3:-false}"
+  local listeners_command=""
 
-  ssh_remote "$host" "pid=\$(ss -ltnp 'sport = :$port' 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -n 1); if [[ -n \"\$pid\" ]] && ps -p \"\$pid\" -o args= | grep -F -q '$(remote_run_dir)'; then echo \"Killing current-run listener on port $port: pid=\$pid signal=$signal\"; kill -$signal \"\$pid\" 2>/dev/null || true; fi"
-}
-
-kill_any_listener_on_port() {
-  local host="$1"
-  local port="$2"
-  local signal="$3"
-
-  ssh_remote "$host" "pid=\$(ss -ltnp 'sport = :$port' 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -n 1); if [[ -n \"\$pid\" ]]; then echo \"Killing listener on port $port: pid=\$pid signal=$signal\"; kill -$signal \"\$pid\" 2>/dev/null || true; fi"
+  [[ "$show_listeners" == "true" ]] && listeners_command="ss -ltn"
+  ssh_remote "$host" "
+    for process_dir in /proc/[0-9]*; do
+      pid=\${process_dir##*/};
+      process_cwd=\$(readlink -f \"\$process_dir/cwd\" 2>/dev/null || true);
+      case \"\$process_cwd\" in
+        '$(remote_run_dir)'/*) kill -$signal \"\$pid\" 2>/dev/null || true ;;
+      esac;
+    done;
+    $listeners_command
+  "
 }
 
 stop() {
-  local node host ports port
+  local node host port ports listeners
 
+  echo "Stopping SSE and ORAM replicas for this run..."
   for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    echo "Stopping on $host"
-    ssh_remote "$host" "pkill -TERM -f '$(remote_run_dir).*[s]se.demo.server.Server' || true; pkill -TERM -f '$(remote_run_dir).*/[s]martrun.sh' || true"
+    stop_current_run_processes "$(ssh_host "$node")" TERM
   done
-
   sleep 2
 
   for node in "${QUINTA_NODES[@]}"; do
     host="$(ssh_host "$node")"
-    ports="$(ports_for_node "$node")"
-    ssh_remote "$host" "pkill -KILL -f '$(remote_run_dir).*[s]se.demo.server.Server' || true; pkill -KILL -f '$(remote_run_dir).*/[s]martrun.sh' || true"
+    listeners="$(stop_current_run_processes "$host" KILL true)" \
+      || { echo "$host could not stop processes or list listening ports; refusing to remove this run's files." >&2; return 1; }
+    ports="$(run_ports_for_node "$node")"
+    if [[ "$(node_ip "$node")" == "$QUINTA_TTP_IP" ]]; then
+      ports+=" $QUINTA_TTP_PORT $QUINTA_ORAM_TTP_PORT"
+    fi
     for port in $ports; do
-      kill_current_run_listener_on_port "$host" "$port" KILL
+      if printf '%s\n' "$listeners" | grep -q ":$port "; then
+        echo "$host still has port $port in use; refusing to remove this run's files." >&2
+        return 1
+      fi
     done
   done
 }
 
-preclean() {
-  local node host ports port
+stop_stale_benchmark_processes() {
+  local host="$1"
+  local signal="$2"
 
+  ssh_remote "$host" "for process_dir in /proc/[0-9]*; do pid=\${process_dir##*/}; process_cwd=\$(readlink -f \"\$process_dir/cwd\" 2>/dev/null || true); case \"\$process_cwd\" in '$QUINTA_REMOTE_ROOT'/*) echo \"Stopping stale benchmark process: pid=\$pid cwd=\$process_cwd signal=$signal\"; kill -$signal \"\$pid\" 2>/dev/null || true ;; esac; done"
+}
+
+verify_no_stale_benchmark_processes() {
+  local host="$1"
+
+  ssh_remote "$host" "for process_dir in /proc/[0-9]*; do pid=\${process_dir##*/}; process_cwd=\$(readlink -f \"\$process_dir/cwd\" 2>/dev/null || true); case \"\$process_cwd\" in '$QUINTA_REMOTE_ROOT'/*) echo \"Still running: pid=\$pid cwd=\$process_cwd\" >&2; exit 1 ;; esac; done"
+}
+
+preclean() {
+  local node host
+
+  echo "Stopping all stale processes under $QUINTA_REMOTE_ROOT..."
   for node in "${QUINTA_NODES[@]}"; do
     host="$(ssh_host "$node")"
-    echo "Preclean stopping stale processes on $host"
-    ssh_remote "$host" "pkill -TERM -f '${QUINTA_REMOTE_ROOT}/.*[s]se.demo.server.Server' || true; pkill -TERM -f '${QUINTA_REMOTE_ROOT}/.*/[s]martrun.sh' || true; pkill -TERM -f '${QUINTA_REMOTE_ROOT}/.*[s]se.benchmark.BenchmarkClient' || true; pkill -TERM -f '${QUINTA_REMOTE_ROOT}/.*[s]se.populatedb.PopulateDB' || true"
+    stop_stale_benchmark_processes "$host" TERM
   done
 
   sleep 2
 
   for node in "${QUINTA_NODES[@]}"; do
     host="$(ssh_host "$node")"
-    ports="$(ports_for_node "$node")"
-    ssh_remote "$host" "pkill -KILL -f '${QUINTA_REMOTE_ROOT}/.*[s]se.demo.server.Server' || true; pkill -KILL -f '${QUINTA_REMOTE_ROOT}/.*/[s]martrun.sh' || true; pkill -KILL -f '${QUINTA_REMOTE_ROOT}/.*[s]se.benchmark.BenchmarkClient' || true; pkill -KILL -f '${QUINTA_REMOTE_ROOT}/.*[s]se.populatedb.PopulateDB' || true"
-    for port in $ports; do
-      kill_any_listener_on_port "$host" "$port" KILL
-    done
+    stop_stale_benchmark_processes "$host" KILL
+    verify_no_stale_benchmark_processes "$host" \
+      || die "$host still has a process running under $QUINTA_REMOTE_ROOT"
   done
 
   for node in "${QUINTA_NODES[@]}"; do
@@ -710,6 +932,7 @@ main() {
 
   case "$COMMAND" in
     layout) print_layout ;;
+    prepare-local) prepare_local_deploy ;;
     preflight) preflight ;;
     deploy) deploy ;;
     start) start ;;

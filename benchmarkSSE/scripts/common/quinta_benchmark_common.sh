@@ -57,11 +57,9 @@ get_property() {
 
 resolve_config_path() {
   local raw_path="$1"
-  if [[ "$raw_path" = /* ]]; then
-    printf '%s\n' "$raw_path"
-  else
-    printf '%s/%s\n' "$CONFIG_DIR" "$raw_path"
-  fi
+
+  python3 -c 'import os, sys; print(os.path.abspath(os.path.join(sys.argv[1], sys.argv[2])))' \
+    "$CONFIG_DIR" "$raw_path"
 }
 
 place_path_in_run_dir() {
@@ -169,7 +167,9 @@ remote_run_dir() {
 deploy_arg() {
   "$DEPLOY_SCRIPT" "$1" \
     --cluster-config "$CLUSTER_CONFIG" \
-    --replicas "$REPLICA_COUNT" \
+    --sseReplicas "$REPLICA_COUNT" \
+    --oramReplicas "${ORAM_REPLICA_COUNT:--1}" \
+    --oramMaxConcurrentClients "${ORAM_MAX_CONCURRENT_CLIENTS:-1}" \
     --clients "$DEPLOY_CLIENT_COUNT" \
     --run-name "$RUN_NAME"
 }
