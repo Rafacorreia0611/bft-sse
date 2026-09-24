@@ -333,11 +333,28 @@ run_populate_remote() {
 }
 
 run_benchmark_remote() {
-  local host
+  local host attempt status
   host="$(client_node "$BENCHMARK_CLIENT_INDEX")"
   echo "Running BenchmarkClient on $host..."
-  ssh_remote "$host" "cd '$(remote_run_dir)/$BENCHMARK_CLIENT_DIR' && env JAVA_OPTS='$QUINTA_CLIENT_JAVA_OPTS' bash smartrun.sh sse.benchmark.BenchmarkClient '$REMOTE_RUNTIME_CONFIG_PATH'" \
-    > "$ABS_LOG_DIR/benchmark.log" 2>&1
+  for attempt in 1 2 3; do
+    if ssh_remote "$host" "cd '$(remote_run_dir)/$BENCHMARK_CLIENT_DIR' && env JAVA_OPTS='$QUINTA_CLIENT_JAVA_OPTS' bash smartrun.sh sse.benchmark.BenchmarkClient '$REMOTE_RUNTIME_CONFIG_PATH'" \
+      > "$ABS_LOG_DIR/benchmark.log" 2>&1; then
+      return 0
+    else
+      status=$?
+    fi
+
+    # A banner timeout happens before authentication, so the remote client was not started.
+    # Never retry an application failure or a disconnect after the client may have started.
+    if [[ "$status" -ne 255 ]] || ! grep -q 'Connection timed out during banner exchange' "$ABS_LOG_DIR/benchmark.log"; then
+      return "$status"
+    fi
+    if [[ "$attempt" -eq 3 ]]; then
+      return "$status"
+    fi
+    echo "SSH banner timeout before BenchmarkClient launch on $host; retrying connection ($attempt/3)..." >&2
+    sleep 5
+  done
 }
 
 fetch_replica_logs() {
