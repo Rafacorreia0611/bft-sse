@@ -1,7 +1,10 @@
 package sse.benchmark;
 
+import sse.benchmark.configs.BenchmarkConfig;
+import sse.benchmark.configs.SearchLatencyByDocsConfig;
+import sse.benchmark.configs.UpdateLatencyByDocsConfig;
 import sse.benchmark.scenario.SearchLatencyByDocsScenario;
-import sse.benchmark.scenario.UpdateLatencyByAssociationsScenario;
+import sse.benchmark.scenario.UpdateLatencyByDocsScenario;
 
 public final class BenchmarkClient {
 
@@ -24,14 +27,13 @@ public final class BenchmarkClient {
     }
 
     static BenchmarkScenario selectScenario(BenchmarkConfig config) {
-        String scenarioName = config.scenarioName();
-        if ("search-latency-by-docs".equals(scenarioName)) {
+        if (config instanceof SearchLatencyByDocsConfig) {
             return new SearchLatencyByDocsScenario();
         }
-        if ("update-latency-by-associations".equals(scenarioName)) {
-            return new UpdateLatencyByAssociationsScenario();
+        if (config instanceof UpdateLatencyByDocsConfig) {
+            return new UpdateLatencyByDocsScenario();
         }
 
-        throw new IllegalArgumentException("Unknown benchmark scenario: " + scenarioName);
+        throw new IllegalArgumentException("Unsupported benchmark config: " + config.getClass().getName());
     }
 }

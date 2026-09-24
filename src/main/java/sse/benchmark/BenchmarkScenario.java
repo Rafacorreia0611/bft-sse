@@ -2,6 +2,8 @@ package sse.benchmark;
 
 import java.io.IOException;
 
+import sse.benchmark.configs.BenchmarkConfig;
+
 public interface BenchmarkScenario {
 
     String name();

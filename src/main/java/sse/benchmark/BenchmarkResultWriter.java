@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 import sse.metrics.SearchOperationMetrics;
+import sse.metrics.UpdateOperationMetrics;
 
 public final class BenchmarkResultWriter implements Closeable {
 
@@ -78,36 +79,48 @@ public final class BenchmarkResultWriter implements Closeable {
     }
 
     public void writeUpdateHeader() throws IOException {
-        writer.write("scenario,operation,run,phase,associations_per_update,keyword_count,doc_id_count,payload_id,latency_ns");
+        writer.write("scenario,operation,run,keyword,doc_count,expected_db_size_before,"
+                + "total_latency_ns,normalization_latency_ns,state_request_latency_ns,"
+                + "address_resolution_latency_ns,oram_lock_latency_ns,token_build_latency_ns,"
+                + "update_request_round_trip_latency_ns,oram_publish_latency_ns");
         writer.newLine();
     }
 
     public void writeUpdateSample(String scenarioName,
                                   BenchmarkOperation operation,
                                   int run,
-                                  String phase,
-                                  int associationsPerUpdate,
-                                  int keywordCount,
+                                  String keyword,
                                   int docIdCount,
-                                  String payloadId,
-                                  long latencyNanos) throws IOException {
+                                  long expectedDbSizeBefore,
+                                  long totalLatencyNanos,
+                                  UpdateOperationMetrics metrics) throws IOException {
         writer.write(csvValue(scenarioName));
         writer.write(',');
         writer.write(csvValue(operation.name()));
         writer.write(',');
         writer.write(Integer.toString(run));
         writer.write(',');
-        writer.write(csvValue(phase));
-        writer.write(',');
-        writer.write(Integer.toString(associationsPerUpdate));
-        writer.write(',');
-        writer.write(Integer.toString(keywordCount));
+        writer.write(csvValue(keyword));
         writer.write(',');
         writer.write(Integer.toString(docIdCount));
         writer.write(',');
-        writer.write(csvValue(payloadId));
+        writer.write(Long.toString(expectedDbSizeBefore));
         writer.write(',');
-        writer.write(Long.toString(latencyNanos));
+        writer.write(Long.toString(totalLatencyNanos));
+        writer.write(',');
+        writer.write(Long.toString(metrics.normalizationLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.oramLockLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.tokenBuildLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.updateRequestRoundTripLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.oramPublishLatencyNanos()));
         writer.newLine();
     }
 

@@ -13,10 +13,11 @@ import java.util.Map;
 import java.util.Set;
 
 import sse.benchmark.BenchmarkBucket;
-import sse.benchmark.BenchmarkConfig;
 import sse.benchmark.BenchmarkOperation;
 import sse.benchmark.BenchmarkResultWriter;
 import sse.benchmark.BenchmarkScenario;
+import sse.benchmark.configs.BenchmarkConfig;
+import sse.benchmark.configs.SearchLatencyByDocsConfig;
 import sse.dataset.KeywordDocIdsEntry;
 import sse.dataset.KeywordDocIdsReader;
 import sse.demo.client.ConfidentialClientAdapter;
@@ -43,14 +44,19 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
 
     @Override
     public void run(BenchmarkConfig config, BenchmarkResultWriter resultWriter) throws Exception {
-        Path vocabularyPath = Paths.get(config.vocabularyPath());
+        if (!(config instanceof SearchLatencyByDocsConfig)) {
+            throw new IllegalArgumentException("Search scenario requires SearchLatencyByDocsConfig");
+        }
+        SearchLatencyByDocsConfig scenarioConfig = (SearchLatencyByDocsConfig) config;
+        Path vocabularyPath = Paths.get(scenarioConfig.vocabularyPath());
         validateVocabularyPath(vocabularyPath);
 
-        List<KeywordDocIdsEntry> entries = loadEntries(config.inputPath());
-        Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket = groupEntriesByBucket(entries, config.buckets());
-        validateEntries(entriesByBucket, config);
+        List<KeywordDocIdsEntry> entries = loadEntries(scenarioConfig.inputPath());
+        Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket =
+                groupEntriesByBucket(entries, scenarioConfig.buckets());
+        validateEntries(entriesByBucket, scenarioConfig);
 
-        ConfidentialClientAdapter adapter = createAdapter(config.clientId());
+        ConfidentialClientAdapter adapter = createAdapter(scenarioConfig.clientId());
         SSEClientHandler clientHandler = new SSEClientHandler(
                 adapter,
                 vocabularyPath
@@ -58,10 +64,10 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         try {
             clientHandler.initializeState();
             System.out.println("Running warm-up searches...");
-            runWarmup(clientHandler, entriesByBucket, config);
+            runWarmup(clientHandler, entriesByBucket, scenarioConfig);
             System.out.println("Warm-up searches finished.");
             System.out.println("Running measured searches...");
-            runMeasurements(clientHandler, entriesByBucket, config, resultWriter);
+            runMeasurements(clientHandler, entriesByBucket, scenarioConfig, resultWriter);
             System.out.println("Measured searches finished.");
         } finally {
             clientHandler.close();
@@ -118,8 +124,9 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
         return entriesByBucket;
     }
 
-    private void validateEntries(Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket, BenchmarkConfig config) {
-        int requiredEntriesPerBucket = config.warmupIterations() + config.measurementIterations();
+    private void validateEntries(Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket,
+                                 SearchLatencyByDocsConfig config) {
+        int requiredEntriesPerBucket = config.warmupPerBucket() + config.measurementsPerBucket();
         for (Map.Entry<BenchmarkBucket, List<KeywordDocIdsEntry>> bucketEntries : entriesByBucket.entrySet()) {
             int availableEntries = bucketEntries.getValue().size();
             if (availableEntries < requiredEntriesPerBucket) {
@@ -139,10 +146,10 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
 
     private void runWarmup(SSEClientHandler clientHandler,
                            Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket,
-                           BenchmarkConfig config) {
+                           SearchLatencyByDocsConfig config) {
         for (Map.Entry<BenchmarkBucket, List<KeywordDocIdsEntry>> bucketEntries : entriesByBucket.entrySet()) {
             List<KeywordDocIdsEntry> entries = bucketEntries.getValue();
-            for (int i = 0; i < config.warmupIterations(); i++) {
+            for (int i = 0; i < config.warmupPerBucket(); i++) {
                 KeywordDocIdsEntry entry = entries.get(i);
                 List<String> results = clientHandler.search(entry.keyword());
                 validateResults(entry, results);
@@ -152,14 +159,14 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
 
     private void runMeasurements(SSEClientHandler clientHandler,
                                  Map<BenchmarkBucket, List<KeywordDocIdsEntry>> entriesByBucket,
-                                 BenchmarkConfig config,
+                                 SearchLatencyByDocsConfig config,
                                  BenchmarkResultWriter resultWriter) throws Exception {
         int run = 1;
         for (Map.Entry<BenchmarkBucket, List<KeywordDocIdsEntry>> bucketEntries : entriesByBucket.entrySet()) {
             BenchmarkBucket bucket = bucketEntries.getKey();
             List<KeywordDocIdsEntry> entries = bucketEntries.getValue();
-            int startIndex = config.warmupIterations();
-            int endIndex = startIndex + config.measurementIterations();
+            int startIndex = config.warmupPerBucket();
+            int endIndex = startIndex + config.measurementsPerBucket();
 
             for (int i = startIndex; i < endIndex; i++) {
                 KeywordDocIdsEntry entry = entries.get(i);
