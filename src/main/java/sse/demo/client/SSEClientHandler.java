@@ -16,6 +16,7 @@ import sse.domain.state.KeywordBlock;
 import sse.domain.state.State;
 import sse.facade.SSEClientFacade;
 import sse.metrics.SearchOperationMetrics;
+import sse.metrics.UpdateOperationMetrics;
 import sse.oram.ORAMAdapter;
 import sse.oram.ORAMSettings;
 import sse.vocabulary.VocabularyLoader;
@@ -137,19 +138,44 @@ public final class SSEClientHandler {
     }
 
     public void update(KeywordUpdate update) {
+        updateInternal(update, null);
+    }
+
+    public void update(KeywordUpdate update, UpdateOperationMetrics metrics) {
+        if (metrics == null) {
+            throw new IllegalArgumentException("metrics cannot be null");
+        }
+        updateInternal(update, metrics);
+    }
+
+    private void updateInternal(KeywordUpdate update, UpdateOperationMetrics metrics) {
         if (update == null) {
             throw new IllegalArgumentException("update cannot be null");
         }
+
+        long phaseStart = startTiming(metrics);
         String normalizedKeyword = sseClientFacade.normalizeKeyword(update.keyword());
+        if (metrics != null) {
+            metrics.recordNormalizationLatency(System.nanoTime() - phaseStart);
+        }
         if (normalizedKeyword == null || normalizedKeyword.isEmpty()) {
             throw new IllegalArgumentException("keyword cannot be normalized: " + update.keyword());
         }
 
+        phaseStart = startTiming(metrics);
         ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
         State state = stateRequest.state();
         SecretKey masterKey = stateRequest.masterKey();
         RSAPrivateKey trapdoorPrivateKey = stateRequest.trapdoorPrivateKey();
+        if (metrics != null) {
+            metrics.recordStateRequestLatency(System.nanoTime() - phaseStart);
+        }
+
+        phaseStart = startTiming(metrics);
         Integer keywordLocation = sseClientFacade.resolveKeywordLocation(masterKey, state, normalizedKeyword);
+        if (metrics != null) {
+            metrics.recordAddressResolutionLatency(System.nanoTime() - phaseStart);
+        }
         if (keywordLocation == null) {
             throw new IllegalArgumentException("keyword is outside the vocabulary: " + update.keyword());
         }
@@ -159,37 +185,58 @@ public final class SSEClientHandler {
                 update.operation()
         );
 
+        phaseStart = startTiming(metrics);
+        KeywordBlock oldBlock;
         while (true) {
-            KeywordBlock oldBlock = oramAdapter.acquireKeywordLock(keywordLocation);
-            if (oldBlock.locked()) {
-                sleepBeforeLockRetry();
-                continue;
+            oldBlock = oramAdapter.acquireKeywordLock(keywordLocation);
+            if (!oldBlock.locked()) {
+                break;
+            }
+            sleepBeforeLockRetry();
+        }
+        if (metrics != null) {
+            metrics.recordOramLockLatency(System.nanoTime() - phaseStart);
+        }
+
+        boolean updateCommitted = false;
+        try {
+            phaseStart = startTiming(metrics);
+            PreparedUpdateRequest preparedUpdateRequest = sseClientFacade.prepareUpdateRequest(
+                    masterKey,
+                    trapdoorPrivateKey,
+                    state,
+                    oldBlock.keywordState(),
+                    canonicalUpdate
+            );
+            SecretKey[] tupleKeys = preparedUpdateRequest.tupleKeys()
+                    .toArray(new SecretKey[preparedUpdateRequest.tupleKeys().size()]);
+            if (metrics != null) {
+                metrics.recordTokenBuildLatency(System.nanoTime() - phaseStart);
             }
 
-            boolean updateCommitted = false;
-            try {
-                PreparedUpdateRequest preparedUpdateRequest = sseClientFacade.prepareUpdateRequest(
-                        masterKey,
-                        trapdoorPrivateKey,
-                        state,
-                        oldBlock.keywordState(),
-                        canonicalUpdate
-                );
+            phaseStart = startTiming(metrics);
+            updateCommitted = adapter.sendUpdateRequest(preparedUpdateRequest.updateToken(), tupleKeys);
+            if (metrics != null) {
+                metrics.recordUpdateRequestRoundTripLatency(System.nanoTime() - phaseStart);
+            }
+            if (!updateCommitted) {
+                throw new IllegalStateException("Server rejected update");
+            }
 
-                SecretKey[] tupleKeys = preparedUpdateRequest.tupleKeys()
-                        .toArray(new SecretKey[preparedUpdateRequest.tupleKeys().size()]);
-                updateCommitted = adapter.sendUpdateRequest(preparedUpdateRequest.updateToken(), tupleKeys);
-                if (!updateCommitted) {
-                    throw new IllegalStateException("Server rejected update");
-                }
-                oramAdapter.publishKeywordState(keywordLocation, preparedUpdateRequest.keywordState());
-                return;
-            } finally {
-                if (!updateCommitted) {
-                    oramAdapter.releaseKeywordLock(keywordLocation);
-                }
+            phaseStart = startTiming(metrics);
+            oramAdapter.publishKeywordState(keywordLocation, preparedUpdateRequest.keywordState());
+            if (metrics != null) {
+                metrics.recordOramPublishLatency(System.nanoTime() - phaseStart);
+            }
+        } finally {
+            if (!updateCommitted) {
+                oramAdapter.releaseKeywordLock(keywordLocation);
             }
         }
+    }
+
+    private static long startTiming(UpdateOperationMetrics metrics) {
+        return metrics == null ? 0L : System.nanoTime();
     }
 
     private void sleepBeforeLockRetry() {
