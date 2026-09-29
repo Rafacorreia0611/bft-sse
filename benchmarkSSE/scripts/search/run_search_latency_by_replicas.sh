@@ -177,10 +177,10 @@ validate_oram_replicas() {
 }
 
 load_bucket_config() {
-  local bucket dataset_type
+  local bucket
 
-  dataset_type="$(get_property datasetType)"
-  case "$dataset_type" in
+  DATASET_TYPE="$(get_property datasetType)"
+  case "$DATASET_TYPE" in
     enron)
       BUCKET_LIST="$(get_property processorBuckets)"
       ;;
@@ -201,6 +201,29 @@ load_bucket_config() {
     BUCKET_LABELS+="${bucket/:/-}"
     BUCKET_COUNT=$((BUCKET_COUNT + 1))
   done
+
+  if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+    CONFIGURED_SEED="$(get_property seed)"
+    validate_seed "$CONFIGURED_SEED"
+    EFFECTIVE_SEED="$(resolve_seed "$CONFIGURED_SEED")"
+  fi
+}
+
+validate_seed() {
+  local value="$1"
+  if [[ "$value" != "random" && ! "$value" =~ ^-?[0-9]+$ ]]; then
+    echo "Property seed must be an integer or random." >&2
+    exit 1
+  fi
+}
+
+resolve_seed() {
+  local configured_seed="$1"
+  if [[ "$configured_seed" == "random" ]]; then
+    python3 -c 'import secrets; print(secrets.randbits(63))'
+  else
+    printf '%s\n' "$configured_seed"
+  fi
 }
 
 load_summary_location() {
@@ -254,15 +277,19 @@ latest_summary_for_run() {
 run_one_benchmark() {
   local sse_replicas="$1"
   local oram_replicas marker_path summary_path
+  local seed_args=()
 
   oram_replicas="${ORAM_REPLICAS_OVERRIDE:-$sse_replicas}"
   marker_path="$(mktemp "$SWEEP_LOG_DIR/.summary_marker.XXXXXX")"
+  if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+    seed_args=(--seed "$EFFECTIVE_SEED")
+  fi
   {
     echo
     echo "===== Running search latency benchmark with SSE=$sse_replicas, ORAM=$oram_replicas ====="
   } | tee -a "$SWEEP_LOG_PATH"
 
-  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --sseReplicas "$sse_replicas" --oramReplicas "$oram_replicas" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
+  if ! "$DOCS_RUNNER" --config "$CONFIG_PATH" --sseReplicas "$sse_replicas" --oramReplicas "$oram_replicas" "${seed_args[@]}" 2>&1 | tee -a "$SWEEP_LOG_PATH"; then
     rm -f "$marker_path"
     echo "Benchmark failed for SSE=$sse_replicas, ORAM=$oram_replicas." >&2
     exit 1
@@ -331,6 +358,10 @@ main() {
   echo "ORAM replicas: ${ORAM_REPLICAS_OVERRIDE:-follow SSE}" | tee -a "$SWEEP_LOG_PATH"
   echo "Config: $CONFIG_PATH" | tee -a "$SWEEP_LOG_PATH"
   echo "Buckets: $BUCKET_LIST" | tee -a "$SWEEP_LOG_PATH"
+  if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+    echo "Configured seed: $CONFIGURED_SEED" | tee -a "$SWEEP_LOG_PATH"
+    echo "Effective seed: $EFFECTIVE_SEED" | tee -a "$SWEEP_LOG_PATH"
+  fi
 
   local replica_count
   for replica_count in "${REPLICA_COUNTS[@]}"; do

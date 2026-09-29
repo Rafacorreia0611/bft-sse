@@ -178,10 +178,10 @@ doc_counts_to_buckets() {
 }
 
 load_bucket_config() {
-  local bucket dataset_type
+  local bucket
 
-  dataset_type="$(get_property datasetType)"
-  case "$dataset_type" in
+  DATASET_TYPE="$(get_property datasetType)"
+  case "$DATASET_TYPE" in
     enron)
       BUCKET_LIST="$(get_property processorBuckets)"
       ;;
@@ -202,6 +202,12 @@ load_bucket_config() {
     BUCKET_LABELS+="${bucket/:/-}"
     BUCKET_COUNT=$((BUCKET_COUNT + 1))
   done
+
+  if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+    CONFIGURED_SEED="$(get_property seed)"
+    validate_seed "$CONFIGURED_SEED" "seed"
+    EFFECTIVE_SEED="$(resolve_seed "$CONFIGURED_SEED")"
+  fi
 }
 
 load_summary_location() {
@@ -253,9 +259,13 @@ latest_summary_for_run() {
 run_one_benchmark() {
   local sse_replicas="$1"
   local oram_replicas marker_path summary_path
+  local seed_args=()
 
   oram_replicas="${ORAM_REPLICAS_OVERRIDE:-$sse_replicas}"
   marker_path="$(mktemp "$SWEEP_LOG_DIR/.summary_marker.XXXXXX")"
+  if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+    seed_args=(--seed "$EFFECTIVE_SEED")
+  fi
   {
     echo
     echo "===== Running Quinta search latency benchmark with SSE=$sse_replicas, ORAM=$oram_replicas ====="
@@ -266,6 +276,7 @@ run_one_benchmark() {
       --cluster-config "$CLUSTER_CONFIG" \
       --sseReplicas "$sse_replicas" \
       --oramReplicas "$oram_replicas" \
+      "${seed_args[@]}" \
       2>&1 | tee -a "$SWEEP_LOG_PATH"; then
     rm -f "$marker_path"
     echo "Benchmark failed for SSE=$sse_replicas, ORAM=$oram_replicas." >&2
@@ -338,6 +349,10 @@ main() {
   echo "Config: $CONFIG_PATH" | tee -a "$SWEEP_LOG_PATH"
   echo "Cluster config: $CLUSTER_CONFIG" | tee -a "$SWEEP_LOG_PATH"
   echo "Buckets: $BUCKET_LIST" | tee -a "$SWEEP_LOG_PATH"
+  if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+    echo "Configured seed: $CONFIGURED_SEED" | tee -a "$SWEEP_LOG_PATH"
+    echo "Effective seed: $EFFECTIVE_SEED" | tee -a "$SWEEP_LOG_PATH"
+  fi
 
   local sse_replicas
   for sse_replicas in "${REPLICA_COUNTS[@]}"; do

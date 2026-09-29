@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -27,7 +28,8 @@ class WorkloadConfig:
     warmup_count: int
     measurement_count: int
     doc_count: int
-    seed: int
+    configured_seed: str
+    effective_seed: int
 
     @property
     def entry_count(self) -> int:
@@ -65,9 +67,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--seed",
-        type=int,
-        default=DEFAULT_SEED,
-        help=f"Keyword sampling seed. Default: {DEFAULT_SEED}.",
+        default=str(DEFAULT_SEED),
+        help=f"Integer seed for reproducible keyword sampling, or 'random'. Default: {DEFAULT_SEED}.",
     )
     return parser.parse_args(argv)
 
@@ -94,6 +95,7 @@ def parse_int(raw_value: str) -> int:
 
 
 def build_config(args: argparse.Namespace) -> WorkloadConfig:
+    configured_seed = args.seed.strip()
     config = WorkloadConfig(
         output_path=Path(args.output),
         vocabulary_path=Path(args.vocabulary).resolve(),
@@ -101,10 +103,20 @@ def build_config(args: argparse.Namespace) -> WorkloadConfig:
         warmup_count=args.warmup_count,
         measurement_count=args.measurement_count,
         doc_count=args.doc_count,
-        seed=args.seed,
+        configured_seed=configured_seed,
+        effective_seed=resolve_seed(configured_seed),
     )
     validate_config(config)
     return config
+
+
+def resolve_seed(configured_seed: str) -> int:
+    if configured_seed == "random":
+        return secrets.randbits(63)
+    try:
+        return int(configured_seed)
+    except ValueError as exc:
+        raise ValueError("seed must be an integer or 'random'") from exc
 
 
 def validate_config(config: WorkloadConfig) -> None:
@@ -119,7 +131,7 @@ def validate_config(config: WorkloadConfig) -> None:
 
 
 def generate_workload(config: WorkloadConfig) -> None:
-    random_generator = random.Random(config.seed)
+    random_generator = random.Random(config.effective_seed)
     base_keywords = load_base_keywords(config.base_dataset_path)
     available_keywords = [
         keyword
@@ -257,7 +269,8 @@ def print_summary(config: WorkloadConfig) -> None:
     print(f"  warm-up entries: {config.warmup_count}")
     print(f"  measured entries: {config.measurement_count}")
     print(f"  document IDs per entry: {config.doc_count}")
-    print(f"  seed: {config.seed}")
+    print(f"  configured seed: {config.configured_seed}")
+    print(f"  effective seed: {config.effective_seed}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -14,6 +14,7 @@ CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
 SSE_REPLICA_COUNT_OVERRIDE=""
 ORAM_REPLICA_COUNT_OVERRIDE=""
+SEED_OVERRIDE=""
 REPLICA_COUNT_SOURCE="config"
 CLEANUP_DONE=0
 SERVERS_MAY_BE_RUNNING=0
@@ -25,7 +26,7 @@ source "$COMMON_SCRIPT"
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [--config PATH] [--cluster-config PATH] [--sseReplicas N] [--oramReplicas N]
+Usage: $(basename "$0") [--config PATH] [--cluster-config PATH] [--sseReplicas N] [--oramReplicas N] [--seed N]
 EOF
 }
 
@@ -70,6 +71,16 @@ parse_args() {
       --oramReplicas=*)
         ORAM_REPLICA_COUNT_OVERRIDE="${1#--oramReplicas=}"
         [[ -n "$ORAM_REPLICA_COUNT_OVERRIDE" ]] || die "Missing value for --oramReplicas"
+        shift
+        ;;
+      --seed)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --seed"
+        SEED_OVERRIDE="$2"
+        shift 2
+        ;;
+      --seed=*)
+        SEED_OVERRIDE="${1#--seed=}"
+        [[ -n "$SEED_OVERRIDE" ]] || die "Missing value for --seed"
         shift
         ;;
       --help|-h)
@@ -211,10 +222,16 @@ validate_dataset_config() {
       SYNTHETIC_OUTPUT_PATH="$(get_property syntheticOutputPath)"
       SYNTHETIC_KEYWORDS_PER_DOC_COUNT="$(get_property syntheticKeywordsPerDocCount)"
       SYNTHETIC_DOC_COUNTS="$(get_property syntheticDocCounts)"
-      SYNTHETIC_SEED="$(get_property syntheticSeed)"
+      CONFIGURED_SEED="$(get_property seed)"
       BUCKETS="$(doc_counts_to_buckets "$SYNTHETIC_DOC_COUNTS")"
       validate_positive_integer "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" "syntheticKeywordsPerDocCount"
-      validate_integer "$SYNTHETIC_SEED" "syntheticSeed"
+      validate_seed "$CONFIGURED_SEED" "seed"
+      if [[ -n "$SEED_OVERRIDE" ]]; then
+        validate_integer "$SEED_OVERRIDE" "--seed"
+        EFFECTIVE_SEED="$SEED_OVERRIDE"
+      else
+        EFFECTIVE_SEED="$(resolve_seed "$CONFIGURED_SEED")"
+      fi
       [[ "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" -eq "$EXPECTED_SAMPLES_PER_BUCKET" ]] || die "syntheticKeywordsPerDocCount must equal warmupPerBucket + measurementsPerBucket"
       ABS_SYNTHETIC_OUTPUT_PATH="$(resolve_config_path "$SYNTHETIC_OUTPUT_PATH")"
       EXPECTED_DATASET_LINES=$((SYNTHETIC_KEYWORDS_PER_DOC_COUNT * $(csv_item_count "$SYNTHETIC_DOC_COUNTS")))
@@ -235,7 +252,7 @@ validate_existing_dataset() {
 }
 
 generate_dataset() {
-  if validate_existing_dataset; then
+  if [[ "$DATASET_TYPE" == "enron" ]] && validate_existing_dataset; then
     echo "Reusing dataset: $ABS_DATASET_PATH"
     return
   fi
@@ -259,7 +276,7 @@ generate_dataset() {
         --vocabulary "$ABS_VOCABULARY_PATH" \
         --keywords-per-doc-count "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" \
         --doc-counts "$SYNTHETIC_DOC_COUNTS" \
-        --seed "$SYNTHETIC_SEED"
+        --seed "$EFFECTIVE_SEED"
       ;;
   esac
 
@@ -278,6 +295,10 @@ write_local_runtime_config() {
     printf 'runtimeOramReplicas=%s\n' "$ORAM_REPLICA_COUNT"
     printf 'runtimeOramMaxConcurrentClients=%s\n' "$ORAM_MAX_CONCURRENT_CLIENTS"
     printf 'runtimeSseReplicasSource=%s\n' "$REPLICA_COUNT_SOURCE"
+    if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+      printf 'runtimeConfiguredSeed=%s\n' "$CONFIGURED_SEED"
+      printf 'runtimeEffectiveSeed=%s\n' "$EFFECTIVE_SEED"
+    fi
     while IFS= read -r line; do
       case "$line" in
         inputPath=*) printf 'inputPath=%s\n' "$remote_dataset_path" ;;
@@ -286,6 +307,13 @@ write_local_runtime_config() {
         sseReplicas=*) printf 'sseReplicas=%s\n' "$REPLICA_COUNT" ;;
         oramReplicas=*) printf 'oramReplicas=%s\n' "$ORAM_REPLICA_COUNT" ;;
         oramMaxConcurrentClients=*) printf 'oramMaxConcurrentClients=%s\n' "$ORAM_MAX_CONCURRENT_CLIENTS" ;;
+        seed=*)
+          if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+            printf 'seed=%s\n' "$EFFECTIVE_SEED"
+          else
+            printf '%s\n' "$line"
+          fi
+          ;;
         buckets=*)
           printf 'buckets=%s\n' "$BUCKETS"
           wrote_buckets=1

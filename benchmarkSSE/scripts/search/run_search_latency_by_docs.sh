@@ -10,6 +10,7 @@ CONFIG_PATH="$DEFAULT_CONFIG"
 CONFIG_DIR=""
 REPLICA_COUNT_OVERRIDE=""
 ORAM_REPLICA_COUNT_OVERRIDE=""
+SEED_OVERRIDE=""
 REPLICA_COUNT_SOURCE="config"
 
 REPLICA_PIDS=()
@@ -18,7 +19,7 @@ CLEANUP_DONE=0
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") [configPath] [--config PATH] [--sseReplicas N] [--oramReplicas N]
+Usage: $(basename "$0") [configPath] [--config PATH] [--sseReplicas N] [--oramReplicas N] [--seed N]
 --oramReplicas overrides the properties file; -1 matches the SSE count.
 EOF
 }
@@ -87,6 +88,24 @@ parse_args() {
         ORAM_REPLICA_COUNT_OVERRIDE="${1#--oramReplicas=}"
         if [[ -z "$ORAM_REPLICA_COUNT_OVERRIDE" ]]; then
           echo "Missing value for --oramReplicas." >&2
+          usage
+          exit 1
+        fi
+        shift
+        ;;
+      --seed)
+        if [[ "$#" -lt 2 || -z "$2" || "$2" == --* ]]; then
+          echo "Missing value for --seed." >&2
+          usage
+          exit 1
+        fi
+        SEED_OVERRIDE="$2"
+        shift 2
+        ;;
+      --seed=*)
+        SEED_OVERRIDE="${1#--seed=}"
+        if [[ -z "$SEED_OVERRIDE" ]]; then
+          echo "Missing value for --seed." >&2
           usage
           exit 1
         fi
@@ -229,7 +248,7 @@ cleanup() {
   if [[ -n "$ACTIVE_CLIENT_PID" ]]; then
     terminate_process_tree "$ACTIVE_CLIENT_PID" TERM 2>/dev/null
   fi
-  terminate_tracked_replicas 2>/dev/null
+  terminate_tracked_replicas 2>/dev/null || true
   if [[ -n "$ACTIVE_CLIENT_PID" ]]; then
     terminate_process_tree "$ACTIVE_CLIENT_PID" KILL 2>/dev/null
     wait "$ACTIVE_CLIENT_PID" 2>/dev/null || true
@@ -375,11 +394,17 @@ load_synthetic_dataset_config() {
   SYNTHETIC_OUTPUT_PATH="$(get_property syntheticOutputPath)"
   SYNTHETIC_KEYWORDS_PER_DOC_COUNT="$(get_property syntheticKeywordsPerDocCount)"
   SYNTHETIC_DOC_COUNTS="$(get_property syntheticDocCounts)"
-  SYNTHETIC_SEED="$(get_property syntheticSeed)"
+  CONFIGURED_SEED="$(get_property seed)"
   BUCKETS="$(doc_counts_to_buckets "$SYNTHETIC_DOC_COUNTS")"
 
   validate_positive_integer "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" "syntheticKeywordsPerDocCount"
-  validate_integer "$SYNTHETIC_SEED" "syntheticSeed"
+  validate_seed "$CONFIGURED_SEED" "seed"
+  if [[ -n "$SEED_OVERRIDE" ]]; then
+    validate_integer "$SEED_OVERRIDE" "--seed"
+    EFFECTIVE_SEED="$SEED_OVERRIDE"
+  else
+    EFFECTIVE_SEED="$(resolve_seed "$CONFIGURED_SEED")"
+  fi
   validate_synthetic_doc_counts
 
   if [[ "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" -ne "$EXPECTED_SAMPLES_PER_BUCKET" ]]; then
@@ -413,6 +438,25 @@ validate_integer() {
   if ! [[ "$value" =~ ^-?[0-9]+$ ]]; then
     echo "Property $label must be an integer." >&2
     exit 1
+  fi
+}
+
+validate_seed() {
+  local value="$1"
+  local label="$2"
+
+  if [[ "$value" != "random" && ! "$value" =~ ^-?[0-9]+$ ]]; then
+    echo "Property $label must be an integer or random." >&2
+    exit 1
+  fi
+}
+
+resolve_seed() {
+  local configured_seed="$1"
+  if [[ "$configured_seed" == "random" ]]; then
+    python3 -c 'import secrets; print(secrets.randbits(63))'
+  else
+    printf '%s\n' "$configured_seed"
   fi
 }
 
@@ -590,6 +634,10 @@ write_runtime_config() {
     printf 'runtimeOramMaxConcurrentClients=%s\n' "$ORAM_MAX_CONCURRENT_CLIENTS"
     printf 'runtimeFaultCount=%s\n' "$FAULT_COUNT"
     printf 'runtimeSseReplicasSource=%s\n' "$REPLICA_COUNT_SOURCE"
+    if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+      printf 'runtimeConfiguredSeed=%s\n' "$CONFIGURED_SEED"
+      printf 'runtimeEffectiveSeed=%s\n' "$EFFECTIVE_SEED"
+    fi
     while IFS= read -r line; do
       case "$line" in
         sseReplicas=*)
@@ -606,6 +654,13 @@ write_runtime_config() {
           ;;
         vocabularyPath=*)
           printf 'vocabularyPath=%s\n' "$ABS_VOCABULARY_PATH"
+          ;;
+        seed=*)
+          if [[ "$DATASET_TYPE" == "synthetic" ]]; then
+            printf 'seed=%s\n' "$EFFECTIVE_SEED"
+          else
+            printf '%s\n' "$line"
+          fi
           ;;
         summaryOutputPath=*)
           printf 'summaryOutputPath=%s\n' "$ABS_SUMMARY_PATH"
@@ -645,7 +700,7 @@ validate_existing_dataset() {
 }
 
 generate_dataset() {
-  if [[ -f "$ABS_DATASET_PATH" ]] && validate_existing_dataset; then
+  if [[ "$DATASET_TYPE" == "enron" && -f "$ABS_DATASET_PATH" ]] && validate_existing_dataset; then
     echo "Reusing existing benchmark dataset at $ABS_DATASET_PATH."
     return
   fi
@@ -693,7 +748,7 @@ generate_synthetic_dataset() {
       --vocabulary "$ABS_VOCABULARY_PATH" \
       --keywords-per-doc-count "$SYNTHETIC_KEYWORDS_PER_DOC_COUNT" \
       --doc-counts "$SYNTHETIC_DOC_COUNTS" \
-      --seed "$SYNTHETIC_SEED"
+      --seed "$EFFECTIVE_SEED"
   )
 }
 

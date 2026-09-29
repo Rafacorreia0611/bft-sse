@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -26,7 +27,8 @@ class SyntheticConfig:
     vocabulary_path: Path
     keywords_per_doc_count: int
     doc_counts: list[int]
-    seed: int
+    configured_seed: str
+    effective_seed: int
 
     @property
     def keyword_count(self) -> int:
@@ -72,9 +74,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--seed",
-        type=int,
-        default=DEFAULT_SEED,
-        help=f"Random seed used for reproducible docId selection. Default: {DEFAULT_SEED}.",
+        default=str(DEFAULT_SEED),
+        help=f"Integer seed for reproducible generation, or 'random'. Default: {DEFAULT_SEED}.",
     )
     return parser.parse_args(argv)
 
@@ -107,15 +108,26 @@ def parse_doc_counts(raw_value: str) -> list[int]:
 
 
 def build_config(args: argparse.Namespace) -> SyntheticConfig:
+    configured_seed = args.seed.strip()
     config = SyntheticConfig(
         output_path=Path(args.output),
         vocabulary_path=Path(args.vocabulary).resolve(),
         keywords_per_doc_count=args.keywords_per_doc_count,
         doc_counts=args.doc_counts,
-        seed=args.seed,
+        configured_seed=configured_seed,
+        effective_seed=resolve_seed(configured_seed),
     )
     validate_config(config)
     return config
+
+
+def resolve_seed(configured_seed: str) -> int:
+    if configured_seed == "random":
+        return secrets.randbits(63)
+    try:
+        return int(configured_seed)
+    except ValueError as exc:
+        raise ValueError("seed must be an integer or 'random'") from exc
 
 
 def validate_config(config: SyntheticConfig) -> None:
@@ -128,7 +140,7 @@ def validate_config(config: SyntheticConfig) -> None:
 
 
 def generate_dataset(config: SyntheticConfig) -> None:
-    random_generator = random.Random(config.seed)
+    random_generator = random.Random(config.effective_seed)
     keywords = sample_vocabulary_keywords(config, random_generator)
     doc_id_width = max(8, len(str(config.doc_universe_size)))
     doc_universe = [
@@ -210,7 +222,8 @@ def print_summary(config: SyntheticConfig) -> None:
     print(f"  keyword-doc associations: {config.association_count}")
     print(f"  keywords per doc count: {config.keywords_per_doc_count}")
     print(f"  doc counts: {','.join(str(doc_count) for doc_count in config.doc_counts)}")
-    print(f"  seed: {config.seed}")
+    print(f"  configured seed: {config.configured_seed}")
+    print(f"  effective seed: {config.effective_seed}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

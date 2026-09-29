@@ -80,6 +80,22 @@ validate_integer() {
   [[ "$value" =~ ^-?[0-9]+$ ]] || die "$label must be an integer"
 }
 
+validate_seed() {
+  local value="$1"
+  local label="$2"
+  [[ "$value" == "random" || "$value" =~ ^-?[0-9]+$ ]] \
+    || die "$label must be an integer or random"
+}
+
+resolve_seed() {
+  local configured_seed="$1"
+  if [[ "$configured_seed" == "random" ]]; then
+    python3 -c 'import secrets; print(secrets.randbits(63))'
+  else
+    printf '%s\n' "$configured_seed"
+  fi
+}
+
 validate_boolean() {
   local value="$1"
   local label="$2"
