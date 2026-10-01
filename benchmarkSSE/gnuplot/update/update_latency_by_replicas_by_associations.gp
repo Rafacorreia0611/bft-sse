@@ -6,12 +6,12 @@ if (!exists("output_dir")) {
     output_dir = "benchmarkSSE/results/final_results_update_latency/plots"
 }
 
-if (!exists("association_values")) {
-    association_values = "1000 5000 10000 15000"
+if (!exists("doc_count_values")) {
+    doc_count_values = "1000 5000 10000 15000"
 }
 
-if (!exists("association_labels")) {
-    association_labels = "1k 5k 10k 15k"
+if (!exists("doc_count_labels")) {
+    doc_count_labels = "1k 5k 10k 15k"
 }
 
 if (!exists("plot_font")) {
@@ -22,7 +22,7 @@ if (!exists("plot_font_size")) {
     plot_font_size = 18
 }
 
-association_count = words(association_values)
+doc_count_count = words(doc_count_values)
 plot_font_spec = sprintf("%s,%d", plot_font, plot_font_size)
 plot_label_font_spec = sprintf("%s,%d", plot_font, plot_font_size + 2)
 
@@ -44,7 +44,7 @@ set tics out nomirror font plot_font_spec
 set style line 81 lc rgb "#cfcfcf" lt 1 lw 1.1
 set grid back xtics ytics ls 81
 set key left top opaque box width 0 samplen 2.1 spacing 1.08 font plot_font_spec
-set xlabel "Replicas" font plot_label_font_spec
+set xlabel "SSE replicas" font plot_label_font_spec
 set ylabel "Time (s)" font plot_label_font_spec
 set lmargin 10
 set bmargin 4.8
@@ -70,6 +70,6 @@ set style line 8 lc rgb "#666666" lt 1 lw 1.4 pt 8 ps 1.35
 
 set output sprintf("%s/update_latency_by_replicas.%s", output_dir, output_ext)
 unset title
-plot for [i=1:association_count] sprintf("< awk -F'\\t' 'NR > 1 && ($1 == 4 || $1 == 7 || $1 == 10) && $4 == \"%s\" { print $1 \"\\t\" $9 / 1000 }' %s | sort -n", word(association_values, i), input_path) using 1:2 with linespoints ls i title sprintf("%s Update Size", word(association_labels, i))
+plot for [i=1:doc_count_count] sprintf("< awk -F'\\t' 'NR > 1 && ($1 == 4 || $1 == 7 || $1 == 10) && $7 == \"total_latency\" && $3 == \"%s\" { print $1 \"\\t\" $10 / 1000 }' %s | sort -n", word(doc_count_values, i), input_path) using 1:2 with linespoints ls i title sprintf("%s Docs/Update", word(doc_count_labels, i))
 
 unset output
