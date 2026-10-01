@@ -26,9 +26,6 @@ benchmarkSSE/plots/
 # Ignore bin directory for compiled classes
 bin
 
-# Ignore local benchmark config variants.
-benchmarkSSE/config/update/*_night.properties
-
 # Ignore local Quinta hosts snippet.
 multiclientSSE-hosts-nodes
 

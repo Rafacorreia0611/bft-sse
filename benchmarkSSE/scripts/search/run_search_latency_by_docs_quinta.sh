@@ -349,40 +349,40 @@ copy_benchmark_inputs() {
 }
 
 run_populate_remote() {
-  local host
+  local host remote_command
   host="$(client_node "$POPULATE_CLIENT_INDEX")"
+  printf -v remote_command \
+    'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q --client-id %q --input %q --batch-size %q --vocabulary %q' \
+    "$(remote_run_dir)/$POPULATE_CLIENT_DIR" \
+    "$QUINTA_CLIENT_JAVA_OPTS" \
+    "sse.populatedb.PopulateDB" \
+    "$POPULATE_CLIENT_ID" \
+    "$REMOTE_DATASET_PATH" \
+    "$POPULATE_BATCH_SIZE" \
+    "$POPULATE_REMOTE_VOCABULARY_PATH"
+
   echo "Running PopulateDB on $host..."
-  ssh_remote "$host" "cd '$(remote_run_dir)/$POPULATE_CLIENT_DIR' && env JAVA_OPTS='$QUINTA_CLIENT_JAVA_OPTS' bash smartrun.sh sse.populatedb.PopulateDB --client-id '$POPULATE_CLIENT_ID' --input '$REMOTE_DATASET_PATH' --batch-size '$POPULATE_BATCH_SIZE' --vocabulary '$POPULATE_REMOTE_VOCABULARY_PATH'" \
-    > "$ABS_LOG_DIR/populate.log" 2>&1
+  run_remote_job "$host" "populate" "$remote_command" "$ABS_LOG_DIR/populate.log"
   grep -q "PopulateDB finished." "$ABS_LOG_DIR/populate.log" || {
     tail -n 40 "$ABS_LOG_DIR/populate.log" >&2 || true
     die "PopulateDB did not finish successfully"
   }
+  echo "PopulateDB finished and validated successfully."
 }
 
 run_benchmark_remote() {
-  local host attempt status
+  local host remote_command
   host="$(client_node "$BENCHMARK_CLIENT_INDEX")"
-  echo "Running BenchmarkClient on $host..."
-  for attempt in 1 2 3; do
-    if ssh_remote "$host" "cd '$(remote_run_dir)/$BENCHMARK_CLIENT_DIR' && env JAVA_OPTS='$QUINTA_CLIENT_JAVA_OPTS' bash smartrun.sh sse.benchmark.BenchmarkClient '$REMOTE_RUNTIME_CONFIG_PATH'" \
-      > "$ABS_LOG_DIR/benchmark.log" 2>&1; then
-      return 0
-    else
-      status=$?
-    fi
+  printf -v remote_command \
+    'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q %q' \
+    "$(remote_run_dir)/$BENCHMARK_CLIENT_DIR" \
+    "$QUINTA_CLIENT_JAVA_OPTS" \
+    "sse.benchmark.BenchmarkClient" \
+    "$REMOTE_RUNTIME_CONFIG_PATH"
 
-    # A banner timeout happens before authentication, so the remote client was not started.
-    # Never retry an application failure or a disconnect after the client may have started.
-    if [[ "$status" -ne 255 ]] || ! grep -q 'Connection timed out during banner exchange' "$ABS_LOG_DIR/benchmark.log"; then
-      return "$status"
-    fi
-    if [[ "$attempt" -eq 3 ]]; then
-      return "$status"
-    fi
-    echo "SSH banner timeout before BenchmarkClient launch on $host; retrying connection ($attempt/3)..." >&2
-    sleep 5
-  done
+  echo "Running BenchmarkClient on $host..."
+  run_remote_job "$host" "benchmark" "$remote_command" "$ABS_LOG_DIR/benchmark.log"
+  echo "BenchmarkClient finished successfully."
 }
 
 fetch_replica_logs() {
@@ -430,7 +430,7 @@ verify_replica_logs() {
 fetch_results() {
   local benchmark_host
   benchmark_host="$(client_node "$BENCHMARK_CLIENT_INDEX")"
-  scp_remote "$benchmark_host:$REMOTE_OUTPUT_PATH" "$ABS_OUTPUT_PATH"
+  copy_remote_file_with_retry "$benchmark_host" "$REMOTE_OUTPUT_PATH" "$ABS_OUTPUT_PATH"
 }
 
 verify_results() {

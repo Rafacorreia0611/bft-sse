@@ -182,6 +182,152 @@ remote_run_dir() {
   printf '%s/%s\n' "$QUINTA_REMOTE_ROOT" "$RUN_NAME"
 }
 
+start_remote_job() {
+  local host="$1"
+  local job_dir="$2"
+  local command="$3"
+  local retry_seconds="${QUINTA_REMOTE_JOB_RETRY_SECONDS:-15}"
+  local wrapper quoted_wrapper status
+
+  wrapper="
+    printf '%s\n' \"\$\$\" > '$job_dir/job.pid.tmp'
+    mv '$job_dir/job.pid.tmp' '$job_dir/job.pid'
+    set +e
+    $command
+    status=\$?
+    printf '%s\n' \"\$status\" > '$job_dir/job.exit.tmp'
+    mv '$job_dir/job.exit.tmp' '$job_dir/job.exit'
+    exit \"\$status\"
+  "
+  printf -v quoted_wrapper '%q' "$wrapper"
+
+  while true; do
+    if ssh_remote "$host" "
+      mkdir -p '$job_dir'
+      if [ -s '$job_dir/job.exit' ] || { [ -s '$job_dir/job.pid' ] && kill -0 \"\$(cat '$job_dir/job.pid')\" 2>/dev/null; }; then
+        exit 0
+      fi
+      [ ! -e '$job_dir/job.pid' ] || exit 2
+      nohup bash -lc $quoted_wrapper > '$job_dir/job.log' 2>&1 < /dev/null &
+    "; then
+      return 0
+    else
+      status=$?
+    fi
+
+    if [[ "$status" -ne 255 ]]; then
+      echo "Could not start the remote job on $host." >&2
+      return "$status"
+    fi
+
+    echo "Could not confirm the remote job launch; retrying in ${retry_seconds}s..." >&2
+    sleep "$retry_seconds"
+  done
+}
+
+copy_remote_file_with_retry() {
+  local host="$1"
+  local remote_path="$2"
+  local local_path="$3"
+  local retry_seconds="${QUINTA_REMOTE_JOB_RETRY_SECONDS:-15}"
+  local status
+
+  while ! scp_remote "$host:$remote_path" "$local_path"; do
+    if ssh_remote "$host" "test -f '$remote_path'" 2>/dev/null; then
+      status=0
+    else
+      status=$?
+    fi
+
+    if [[ "$status" -ne 0 && "$status" -ne 255 ]]; then
+      echo "Remote file does not exist: $remote_path" >&2
+      return 1
+    fi
+
+    echo "Cannot retrieve $remote_path; retrying in ${retry_seconds}s..." >&2
+    sleep "$retry_seconds"
+  done
+}
+
+run_remote_job() {
+  local host="$1"
+  local job_name="$2"
+  local command="$3"
+  local local_log="$4"
+  local poll_seconds="${QUINTA_REMOTE_JOB_POLL_SECONDS:-30}"
+  local retry_seconds="${QUINTA_REMOTE_JOB_RETRY_SECONDS:-15}"
+  local job_dir="$(remote_run_dir)/benchmark/jobs/$job_name"
+  local snapshot state progress exit_code
+  local last_progress=""
+  local connection_lost=0
+
+  start_remote_job "$host" "$job_dir" "$command"
+
+  while true; do
+    if snapshot="$(ssh_remote "$host" "
+      if [ -s '$job_dir/job.exit' ]; then
+        printf 'FINISHED:%s\n' \"\$(cat '$job_dir/job.exit')\"
+      elif [ -s '$job_dir/job.pid' ] && kill -0 \"\$(cat '$job_dir/job.pid')\" 2>/dev/null; then
+        printf 'RUNNING\n'
+      elif [ -e '$job_dir/job.pid' ]; then
+        sleep 1
+        if [ -s '$job_dir/job.exit' ]; then
+          printf 'FINISHED:%s\n' \"\$(cat '$job_dir/job.exit')\"
+        else
+          printf 'LOST\n'
+        fi
+      else
+        printf 'STARTING\n'
+      fi
+      if [ -s '$job_dir/job.log' ]; then
+        tr '\r' '\n' < '$job_dir/job.log' | awk 'NF { latest = \$0 } END { if (latest != \"\") print latest }'
+      fi
+    " 2>/dev/null)"; then
+      if [[ "$connection_lost" -eq 1 ]]; then
+        echo "Quinta connection restored; continuing to monitor $job_name."
+        connection_lost=0
+      fi
+
+      state="$(printf '%s\n' "$snapshot" | head -n 1)"
+      progress="$(printf '%s\n' "$snapshot" | tail -n +2 | tail -n 1)"
+      if [[ -n "$progress" && "$progress" != "$last_progress" ]]; then
+        echo "$progress"
+        last_progress="$progress"
+      fi
+
+      case "$state" in
+        RUNNING|STARTING) sleep "$poll_seconds" ;;
+        FINISHED:*)
+          exit_code="${state#FINISHED:}"
+          break
+          ;;
+        LOST)
+          copy_remote_file_with_retry "$host" "$job_dir/job.log" "$local_log" || true
+          echo "Remote $job_name job stopped without recording an exit status." >&2
+          return 1
+          ;;
+        *)
+          echo "Unexpected remote $job_name status: ${state:-empty}" >&2
+          return 1
+          ;;
+      esac
+    else
+      if [[ "$connection_lost" -eq 0 ]]; then
+        echo "Cannot reach Quinta; $job_name continues remotely. Retrying in ${retry_seconds}s..." >&2
+        connection_lost=1
+      fi
+      sleep "$retry_seconds"
+    fi
+  done
+
+  copy_remote_file_with_retry "$host" "$job_dir/job.log" "$local_log"
+  if ! [[ "$exit_code" =~ ^[0-9]+$ ]] || [[ "$exit_code" -ne 0 ]]; then
+    echo "Remote $job_name failed with exit status ${exit_code:-unknown}." >&2
+    tail -n 40 "$local_log" >&2 || true
+    return 1
+  fi
+}
+
 deploy_arg() {
   "$DEPLOY_SCRIPT" "$1" \
     --cluster-config "$CLUSTER_CONFIG" \
