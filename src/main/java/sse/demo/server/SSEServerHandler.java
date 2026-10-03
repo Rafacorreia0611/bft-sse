@@ -26,16 +26,13 @@ public final class SSEServerHandler {
     }
 
     public boolean initializeState(InitialStatePayload initialStatePayload,
-                                   VerifiableShare masterKeyShare,
-                                   VerifiableShare trapdoorPrivateKeyShare) {
+                                   VerifiableShare masterKeyShare) {
         if (initialStatePayload == null) {
             return false;
         }
         return sseServerFacade.initializeState(
-                initialStatePayload.encodedTrapdoorPublicKey(),
                 initialStatePayload.encryptedKeywordLocationMap(),
-                masterKeyShare,
-                trapdoorPrivateKeyShare
+                masterKeyShare
         );
     }
 
@@ -62,14 +59,13 @@ public final class SSEServerHandler {
 
         State state = sseServerFacade.getState();
         VerifiableShare masterKeyShare = sseServerFacade.getMasterKey();
-        VerifiableShare trapdoorPrivateKeyShare = sseServerFacade.getTrapdoorPrivateKey();
 
         byte[] plainResponse = serializeResponse(ResponseStatus.OK, state);
-        if (masterKeyShare == null || trapdoorPrivateKeyShare == null) {
+        if (masterKeyShare == null) {
             return new ConfidentialMessage(plainResponse);
         }
 
-        return new ConfidentialMessage(plainResponse, masterKeyShare, trapdoorPrivateKeyShare);
+        return new ConfidentialMessage(plainResponse, masterKeyShare);
     }
 
     public ConfidentialMessage handleUpdate(int clientId, UpdateToken updateToken, VerifiableShare[] updateTupleKeyShares) {
@@ -90,8 +86,7 @@ public final class SSEServerHandler {
         byte[] plainData = sseSnapshotData.serialize();
         VerifiableShare[] shares = sseServerFacade.getSnapshotShares(
                 sseSnapshotData.updateTupleShareOrder(),
-                sseSnapshotData.hasMasterKeyShare(),
-                sseSnapshotData.hasTrapdoorPrivateKeyShare()
+                sseSnapshotData.hasMasterKeyShare()
         );
         return new ConfidentialSnapshot(plainData, shares);
     }
@@ -101,7 +96,6 @@ public final class SSEServerHandler {
         sseServerFacade.installSnapshot(
                 snapshot,
                 snapshot.masterKeyShare(cs.getShares()),
-                snapshot.trapdoorPrivateKeyShare(cs.getShares()),
                 snapshot.updateTupleShares(cs.getShares())
         );
     }

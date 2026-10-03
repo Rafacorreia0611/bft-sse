@@ -8,27 +8,19 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.Arrays;
 import java.util.Objects;
 
 import sse.domain.state.EncryptedKeywordLocationMap;
 
 public final class InitialStatePayload implements Serializable {
 
-    private final byte[] encodedTrapdoorPublicKey;
     private final EncryptedKeywordLocationMap encryptedKeywordLocationMap;
 
-    public InitialStatePayload(byte[] encodedTrapdoorPublicKey,
-                               EncryptedKeywordLocationMap encryptedKeywordLocationMap) {
-        if (encodedTrapdoorPublicKey == null || encryptedKeywordLocationMap == null) {
-            throw new IllegalArgumentException("encodedTrapdoorPublicKey and encryptedKeywordLocationMap cannot be null");
+    public InitialStatePayload(EncryptedKeywordLocationMap encryptedKeywordLocationMap) {
+        if (encryptedKeywordLocationMap == null) {
+            throw new IllegalArgumentException("encryptedKeywordLocationMap cannot be null");
         }
-        this.encodedTrapdoorPublicKey = Arrays.copyOf(encodedTrapdoorPublicKey, encodedTrapdoorPublicKey.length);
         this.encryptedKeywordLocationMap = encryptedKeywordLocationMap;
-    }
-
-    public byte[] encodedTrapdoorPublicKey() {
-        return Arrays.copyOf(encodedTrapdoorPublicKey, encodedTrapdoorPublicKey.length);
     }
 
     public EncryptedKeywordLocationMap encryptedKeywordLocationMap() {
@@ -72,20 +64,18 @@ public final class InitialStatePayload implements Serializable {
             return false;
         }
         InitialStatePayload that = (InitialStatePayload) o;
-        return Arrays.equals(encodedTrapdoorPublicKey, that.encodedTrapdoorPublicKey)
-                && Objects.equals(encryptedKeywordLocationMap, that.encryptedKeywordLocationMap);
+        return Objects.equals(encryptedKeywordLocationMap, that.encryptedKeywordLocationMap);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(Arrays.hashCode(encodedTrapdoorPublicKey), encryptedKeywordLocationMap);
+        return Objects.hash(encryptedKeywordLocationMap);
     }
 
     @Override
     public String toString() {
         return "InitialStatePayload[" +
-                "encodedTrapdoorPublicKeyLength=" + encodedTrapdoorPublicKey.length +
-                ", encryptedKeywordLocationMap=" + encryptedKeywordLocationMap +
+                "encryptedKeywordLocationMap=" + encryptedKeywordLocationMap +
                 ']';
     }
 }

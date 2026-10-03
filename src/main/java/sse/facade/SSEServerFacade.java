@@ -2,9 +2,7 @@ package sse.facade;
 
 import java.util.Map;
 import java.util.List;
-import java.security.interfaces.RSAPublicKey;
 
-import sse.crypto.TrapdoorPermutation;
 import sse.domain.id.IndexAddress;
 import sse.domain.search.SearchResponseData;
 import sse.domain.search.SearchToken;
@@ -48,47 +46,26 @@ public final class SSEServerFacade {
         if (!state.isInitialized()) {
             throw new IllegalStateException("Server state is not initialized");
         }
-        return new State(
-                TrapdoorPermutation.encodePublicKey(state.trapdoorPublicKey()),
-                state.encryptedKeywordLocationMap()
-        );
+        return new State(state.encryptedKeywordLocationMap());
     }
 
     public VerifiableShare getMasterKey() {
         return state.keyShareStore().masterKeyShare();
     }
 
-    public VerifiableShare getTrapdoorPrivateKey() {
-        return state.keyShareStore().trapdoorPrivateKeyShare();
-    }
-
-    public Boolean initializeState(byte[] encodedTrapdoorPublicKey,
-                                   EncryptedKeywordLocationMap encryptedKeywordLocationMap,
-                                   VerifiableShare masterKeyShare,
-                                   VerifiableShare trapdoorPrivateKeyShare) {
-        if (encodedTrapdoorPublicKey == null || encryptedKeywordLocationMap == null
-                || masterKeyShare == null || trapdoorPrivateKeyShare == null) {
+    public Boolean initializeState(EncryptedKeywordLocationMap encryptedKeywordLocationMap,
+                                   VerifiableShare masterKeyShare) {
+        if (encryptedKeywordLocationMap == null || masterKeyShare == null) {
             return false;
         }
         if (state.isInitialized()
                 || state.keyShareStore().hasMasterKeyShare()
-                || state.keyShareStore().hasTrapdoorPrivateKeyShare()
-                || state.trapdoorPublicKey() != null
                 || state.encryptedKeywordLocationMap() != null) {
             return false;
         }
 
-        RSAPublicKey trapdoorPublicKey;
-        try {
-            trapdoorPublicKey = TrapdoorPermutation.decodePublicKey(encodedTrapdoorPublicKey);
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
-
-        state.setTrapdoorPublicKey(trapdoorPublicKey);
         state.setEncryptedKeywordLocationMap(encryptedKeywordLocationMap);
         state.keyShareStore().setMasterKeyShare(masterKeyShare);
-        state.keyShareStore().setTrapdoorPrivateKeyShare(trapdoorPrivateKeyShare);
         return true;
     }
 
@@ -97,24 +74,20 @@ public final class SSEServerFacade {
     }
 
     public VerifiableShare[] getSnapshotShares(List<IndexAddress> updateTupleShareOrder,
-                                               boolean includeMasterKeyShare,
-                                               boolean includeTrapdoorPrivateKeyShare) {
+                                               boolean includeMasterKeyShare) {
         return snapshotService.getSnapshotShares(
                 state,
                 updateTupleShareOrder,
-                includeMasterKeyShare,
-                includeTrapdoorPrivateKeyShare
+                includeMasterKeyShare
         );
     }
 
     public void installSnapshot(SSEPlainSnapshotData snapshotData, VerifiableShare masterKeyShare,
-                                VerifiableShare trapdoorPrivateKeyShare,
                                 Map<IndexAddress, VerifiableShare> updateTupleShares) {
         snapshotService.installSnapshot(
                 state,
                 snapshotData,
                 masterKeyShare,
-                trapdoorPrivateKeyShare,
                 updateTupleShares
         );
     }

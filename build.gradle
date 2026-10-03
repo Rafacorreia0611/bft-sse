@@ -178,6 +178,8 @@ task exportUsableVocabulary(type: JavaExec, dependsOn: classes) {
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
+
     implementation fileTree('lib'){include '*.jar'}
 
     // https://mvnrepository.com/artifact/org.bouncycastle/bcpkix-jdk15on

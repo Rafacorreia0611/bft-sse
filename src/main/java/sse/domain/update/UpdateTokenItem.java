@@ -8,22 +8,22 @@ import sse.domain.id.IndexAddress;
 public final class UpdateTokenItem implements Serializable {
 
     private final IndexAddress address;
-    private final EncryptedUpdateTuple encryptedTuple;
+    private final IndexEntry indexEntry;
 
-    public UpdateTokenItem(IndexAddress address, EncryptedUpdateTuple encryptedTuple) {
-        if (address == null || encryptedTuple == null) {
-            throw new IllegalArgumentException("address and encryptedTuple cannot be null");
+    public UpdateTokenItem(IndexAddress address, IndexEntry indexEntry) {
+        if (address == null || indexEntry == null) {
+            throw new IllegalArgumentException("address and indexEntry cannot be null");
         }
         this.address = address;
-        this.encryptedTuple = encryptedTuple;
+        this.indexEntry = indexEntry;
     }
 
     public IndexAddress address() {
         return address;
     }
 
-    public EncryptedUpdateTuple encryptedTuple() {
-        return encryptedTuple;
+    public IndexEntry indexEntry() {
+        return indexEntry;
     }
 
     @Override
@@ -36,19 +36,19 @@ public final class UpdateTokenItem implements Serializable {
         }
         UpdateTokenItem that = (UpdateTokenItem) o;
         return Objects.equals(address, that.address)
-                && Objects.equals(encryptedTuple, that.encryptedTuple);
+                && Objects.equals(indexEntry, that.indexEntry);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(address, encryptedTuple);
+        return Objects.hash(address, indexEntry);
     }
 
     @Override
     public String toString() {
         return "UpdateTokenItem[" +
                 "address=" + address +
-                ", encryptedTuple=" + encryptedTuple +
+                ", indexEntry=" + indexEntry +
                 ']';
     }
 }

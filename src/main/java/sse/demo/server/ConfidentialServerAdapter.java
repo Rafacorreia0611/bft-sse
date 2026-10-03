@@ -38,8 +38,7 @@ public final class ConfidentialServerAdapter implements ConfidentialSingleExecut
                     return statusMessage(
                             handler.initializeState(
                                     initialStatePayload,
-                                    vss != null && vss.length > 0 ? vss[0] : null,
-                                    vss != null && vss.length > 1 ? vss[1] : null
+                                    vss != null && vss.length == 1 ? vss[0] : null
                             ) ? ResponseStatus.OK : ResponseStatus.FAILED
                     );
                 case IS_INITIALIZED:

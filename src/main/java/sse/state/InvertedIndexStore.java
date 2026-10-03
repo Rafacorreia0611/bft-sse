@@ -3,12 +3,12 @@ package sse.state;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import sse.domain.update.EncryptedUpdateTuple;
 import sse.domain.id.IndexAddress;
+import sse.domain.update.IndexEntry;
 
 public final class InvertedIndexStore {
 
-    private Map<IndexAddress, EncryptedUpdateTuple> entries;
+    private Map<IndexAddress, IndexEntry> entries;
 
     public InvertedIndexStore() {
         this.entries = new LinkedHashMap<>();
@@ -18,19 +18,19 @@ public final class InvertedIndexStore {
         return entries.containsKey(address);
     }
 
-    public EncryptedUpdateTuple get(IndexAddress address) {
+    public IndexEntry get(IndexAddress address) {
         return entries.get(address);
     }
 
-    public void put(IndexAddress address, EncryptedUpdateTuple tuple) {
-        entries.put(address, tuple);
+    public void put(IndexAddress address, IndexEntry entry) {
+        entries.put(address, entry);
     }
 
-    public Map<IndexAddress, EncryptedUpdateTuple> snapshot() {
+    public Map<IndexAddress, IndexEntry> snapshot() {
         return new LinkedHashMap<>(entries);
     }
 
-    public void restore(Map<IndexAddress, EncryptedUpdateTuple> snapshot) {
+    public void restore(Map<IndexAddress, IndexEntry> snapshot) {
         this.entries = new LinkedHashMap<>(snapshot);
     }
 }

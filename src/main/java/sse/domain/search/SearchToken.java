@@ -14,22 +14,33 @@ import java.util.Objects;
 import sse.domain.id.SearchTokenValue;
 
 public final class SearchToken implements Serializable {
-    private final byte[] keywordAddressKey;
+
+    private static final int KEYWORD_KEY_LENGTH_BYTES = 32;
+    private static final int STATE_LENGTH_BYTES = 16;
+
+    private final byte[] keywordKey;
     private final SearchTokenValue currentToken;
     private final int counter;
 
-    public SearchToken(byte[] keywordAddressKey, SearchTokenValue currentToken, int counter) {
-        if (keywordAddressKey == null || currentToken == null || counter <= 0) {
+    public SearchToken(byte[] keywordKey, SearchTokenValue currentToken, int counter) {
+        if (keywordKey == null || keywordKey.length != KEYWORD_KEY_LENGTH_BYTES) {
             throw new IllegalArgumentException(
-                    "keywordAddressKey and currentToken cannot be null and counter must be greater than zero");
+                    "keywordKey must be exactly " + KEYWORD_KEY_LENGTH_BYTES + " bytes");
         }
-        this.keywordAddressKey = keywordAddressKey.clone();
+        if (currentToken == null || currentToken.value().length != STATE_LENGTH_BYTES) {
+            throw new IllegalArgumentException(
+                    "currentToken must be exactly " + STATE_LENGTH_BYTES + " bytes");
+        }
+        if (counter <= 0) {
+            throw new IllegalArgumentException("counter must be greater than zero");
+        }
+        this.keywordKey = keywordKey.clone();
         this.currentToken = currentToken;
         this.counter = counter;
     }
 
-    public byte[] keywordAddressKey() {
-        return keywordAddressKey.clone();
+    public byte[] keywordKey() {
+        return keywordKey.clone();
     }
 
     public SearchTokenValue currentToken() {
@@ -74,21 +85,21 @@ public final class SearchToken implements Serializable {
         }
         SearchToken that = (SearchToken) o;
         return counter == that.counter
-                && Arrays.equals(keywordAddressKey, that.keywordAddressKey)
+                && Arrays.equals(keywordKey, that.keywordKey)
                 && Objects.equals(currentToken, that.currentToken);
     }
 
     @Override
     public int hashCode() {
         int result = Objects.hash(currentToken, counter);
-        result = 31 * result + Arrays.hashCode(keywordAddressKey);
+        result = 31 * result + Arrays.hashCode(keywordKey);
         return result;
     }
 
     @Override
     public String toString() {
         return "SearchToken[" +
-                "keywordAddressKeyLength=" + keywordAddressKey.length +
+                "keywordKeyLength=" + keywordKey.length +
                 ", currentToken=" + currentToken +
                 ", counter=" + counter +
                 ']';

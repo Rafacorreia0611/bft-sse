@@ -8,61 +8,47 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import sse.domain.update.EncryptedUpdateTuple;
 import sse.domain.id.IndexAddress;
 import sse.domain.state.EncryptedKeywordLocationMap;
+import sse.domain.update.IndexEntry;
 import vss.secretsharing.VerifiableShare;
 
 public final class SSEPlainSnapshotData implements Serializable {
-    private final byte[] encodedTrapdoorPublicKey;
     private final EncryptedKeywordLocationMap encryptedKeywordLocationMap;
-    private final Map<IndexAddress, EncryptedUpdateTuple> invertedIndex;
+    private final Map<IndexAddress, IndexEntry> invertedIndex;
     private final List<IndexAddress> updateTupleShareOrder;
     private final boolean hasMasterKeyShare;
-    private final boolean hasTrapdoorPrivateKeyShare;
 
-    public SSEPlainSnapshotData(byte[] encodedTrapdoorPublicKey,
-                                EncryptedKeywordLocationMap encryptedKeywordLocationMap,
-                                Map<IndexAddress, EncryptedUpdateTuple> invertedIndex,
+    public SSEPlainSnapshotData(EncryptedKeywordLocationMap encryptedKeywordLocationMap,
+                                Map<IndexAddress, IndexEntry> invertedIndex,
                                 List<IndexAddress> updateTupleShareOrder,
-                                boolean hasMasterKeyShare,
-                                boolean hasTrapdoorPrivateKeyShare) {
-        this.encodedTrapdoorPublicKey = encodedTrapdoorPublicKey == null ? null : encodedTrapdoorPublicKey.clone();
+                                boolean hasMasterKeyShare) {
         this.encryptedKeywordLocationMap = encryptedKeywordLocationMap;
         this.invertedIndex = new LinkedHashMap<>(invertedIndex);
-        this.updateTupleShareOrder = updateTupleShareOrder;
+        this.updateTupleShareOrder = new ArrayList<>(updateTupleShareOrder);
         this.hasMasterKeyShare = hasMasterKeyShare;
-        this.hasTrapdoorPrivateKeyShare = hasTrapdoorPrivateKeyShare;
-    }
-
-    public byte[] encodedTrapdoorPublicKey() {
-        return encodedTrapdoorPublicKey == null ? null : encodedTrapdoorPublicKey.clone();
     }
 
     public EncryptedKeywordLocationMap encryptedKeywordLocationMap() {
         return encryptedKeywordLocationMap;
     }
 
-    public Map<IndexAddress, EncryptedUpdateTuple> invertedIndex() {
-        return invertedIndex;
+    public Map<IndexAddress, IndexEntry> invertedIndex() {
+        return new LinkedHashMap<>(invertedIndex);
     }
 
     public List<IndexAddress> updateTupleShareOrder() {
-        return updateTupleShareOrder;
+        return new ArrayList<>(updateTupleShareOrder);
     }
 
     public boolean hasMasterKeyShare() {
         return hasMasterKeyShare;
-    }
-
-    public boolean hasTrapdoorPrivateKeyShare() {
-        return hasTrapdoorPrivateKeyShare;
     }
 
     public byte[] serialize() {
@@ -80,7 +66,11 @@ public final class SSEPlainSnapshotData implements Serializable {
     public static SSEPlainSnapshotData deserialize(byte[] plainData) {
         try (ByteArrayInputStream bis = new ByteArrayInputStream(plainData);
              ObjectInput in = new ObjectInputStream(bis)) {
-            return (SSEPlainSnapshotData) in.readObject();
+            Object snapshot = in.readObject();
+            if (!(snapshot instanceof SSEPlainSnapshotData)) {
+                throw new IllegalArgumentException("Snapshot data has invalid type");
+            }
+            return (SSEPlainSnapshotData) snapshot;
         } catch (IOException | ClassNotFoundException e) {
             throw new RuntimeException("Error deserializing snapshot", e);
         }
@@ -96,23 +86,9 @@ public final class SSEPlainSnapshotData implements Serializable {
         return shares[0];
     }
 
-    public VerifiableShare trapdoorPrivateKeyShare(VerifiableShare[] shares) {
-        if (!hasTrapdoorPrivateKeyShare) {
-            return null;
-        }
-        int index = hasMasterKeyShare ? 1 : 0;
-        if (shares == null || index >= shares.length) {
-            throw new IllegalStateException("Snapshot is missing trapdoor private key share");
-        }
-        return shares[index];
-    }
-
     public Map<IndexAddress, VerifiableShare> updateTupleShares(VerifiableShare[] shares) {
         int index = 0;
         if (hasMasterKeyShare) {
-            index++;
-        }
-        if (hasTrapdoorPrivateKeyShare) {
             index++;
         }
         Map<IndexAddress, VerifiableShare> result = new LinkedHashMap<IndexAddress, VerifiableShare>();
@@ -138,8 +114,6 @@ public final class SSEPlainSnapshotData implements Serializable {
         }
         SSEPlainSnapshotData that = (SSEPlainSnapshotData) o;
         return hasMasterKeyShare == that.hasMasterKeyShare &&
-                hasTrapdoorPrivateKeyShare == that.hasTrapdoorPrivateKeyShare &&
-                Arrays.equals(encodedTrapdoorPublicKey, that.encodedTrapdoorPublicKey) &&
                 Objects.equals(encryptedKeywordLocationMap, that.encryptedKeywordLocationMap) &&
                 Objects.equals(invertedIndex, that.invertedIndex) &&
                 Objects.equals(updateTupleShareOrder, that.updateTupleShareOrder);
@@ -147,26 +121,17 @@ public final class SSEPlainSnapshotData implements Serializable {
 
     @Override
     public int hashCode() {
-        int result = Objects.hash(encryptedKeywordLocationMap, invertedIndex, updateTupleShareOrder,
-                hasMasterKeyShare, hasTrapdoorPrivateKeyShare);
-        result = 31 * result + Arrays.hashCode(encodedTrapdoorPublicKey);
-        return result;
+        return Objects.hash(encryptedKeywordLocationMap, invertedIndex, updateTupleShareOrder,
+                hasMasterKeyShare);
     }
 
     @Override
     public String toString() {
         return "SSEPlainSnapshotData[" +
-                "encodedTrapdoorPublicKeyLength=" +
-                (encodedTrapPublicKeyLength()) +
-                ", encryptedKeywordLocationMap=" + encryptedKeywordLocationMap +
+                "encryptedKeywordLocationMap=" + encryptedKeywordLocationMap +
                 ", invertedIndex=" + invertedIndex +
                 ", updateTupleShareOrder=" + updateTupleShareOrder +
                 ", hasMasterKeyShare=" + hasMasterKeyShare +
-                ", hasTrapdoorPrivateKeyShare=" + hasTrapdoorPrivateKeyShare +
                 ']';
-    }
-
-    private int encodedTrapPublicKeyLength() {
-        return encodedTrapdoorPublicKey == null ? 0 : encodedTrapdoorPublicKey.length;
     }
 }

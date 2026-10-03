@@ -3,7 +3,6 @@ package sse.populatedb;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.security.interfaces.RSAPrivateKey;
 import java.util.List;
 
 import javax.crypto.SecretKey;
@@ -79,7 +78,6 @@ public final class PopulateDBHandler implements AutoCloseable {
             ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
             State currentState = stateRequest.state();
             SecretKey masterKey = stateRequest.masterKey();
-            RSAPrivateKey trapdoorPrivateKey = stateRequest.trapdoorPrivateKey();
 
             long processedKeywords = 0L;
             long processedDocIds = 0L;
@@ -109,7 +107,6 @@ public final class PopulateDBHandler implements AutoCloseable {
                                     UpdateOp.ADD
                             ),
                             masterKey,
-                            trapdoorPrivateKey,
                             currentState
                     );
                     processedDocIds += sentDocIds;
@@ -135,7 +132,7 @@ public final class PopulateDBHandler implements AutoCloseable {
     }
 
     private int sendKeywordBatch(KeywordUpdate update,
-                                 SecretKey masterKey, RSAPrivateKey trapdoorPrivateKey, State currentState) {
+                                 SecretKey masterKey, State currentState) {
         String normalizedKeyword = sseClientFacade.normalizeKeyword(update.keyword());
         if (normalizedKeyword == null || normalizedKeyword.isEmpty()) {
             throw new IllegalArgumentException("keyword cannot be normalized: " + update.keyword());
@@ -161,8 +158,6 @@ public final class PopulateDBHandler implements AutoCloseable {
             try {
                 PreparedUpdateRequest preparedUpdateRequest = sseClientFacade.prepareUpdateRequest(
                         masterKey,
-                        trapdoorPrivateKey,
-                        currentState,
                         oldBlock.keywordState(),
                         canonicalUpdate
                 );

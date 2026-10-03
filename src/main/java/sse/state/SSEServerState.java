@@ -1,29 +1,17 @@
 package sse.state;
 
-import java.security.interfaces.RSAPublicKey;
-
 import sse.domain.state.EncryptedKeywordLocationMap;
 
 public final class SSEServerState {
 
-    private RSAPublicKey trapdoorPublicKey;
     private EncryptedKeywordLocationMap encryptedKeywordLocationMap;
     private final InvertedIndexStore invertedIndexStore;
     private final KeyShareStore keyShareStore;
 
     public SSEServerState() {
-        this.trapdoorPublicKey = null;
         this.encryptedKeywordLocationMap = null;
         this.invertedIndexStore = new InvertedIndexStore();
         this.keyShareStore = new KeyShareStore();
-    }
-
-    public RSAPublicKey trapdoorPublicKey() {
-        return trapdoorPublicKey;
-    }
-
-    public void setTrapdoorPublicKey(RSAPublicKey trapdoorPublicKey) {
-        this.trapdoorPublicKey = trapdoorPublicKey;
     }
 
     public EncryptedKeywordLocationMap encryptedKeywordLocationMap() {
@@ -35,10 +23,8 @@ public final class SSEServerState {
     }
 
     public boolean isInitialized() {
-        return trapdoorPublicKey != null
-                && encryptedKeywordLocationMap != null
-                && keyShareStore.hasMasterKeyShare()
-                && keyShareStore.hasTrapdoorPrivateKeyShare();
+        return encryptedKeywordLocationMap != null
+                && keyShareStore.hasMasterKeyShare();
     }
 
     public InvertedIndexStore invertedIndexStore() {

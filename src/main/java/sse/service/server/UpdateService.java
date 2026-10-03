@@ -12,8 +12,9 @@ import vss.secretsharing.VerifiableShare;
 public final class UpdateService {
 
     public void update(SSEServerState state, UpdateToken updateToken, VerifiableShare[] updateTupleKeyShares) {
-        if (updateToken == null || updateTupleKeyShares == null) {
-            throw new IllegalArgumentException("updateToken and updateTupleKeyShares cannot be null");
+        if (state == null || updateToken == null || updateTupleKeyShares == null) {
+            throw new IllegalArgumentException(
+                    "state, updateToken and updateTupleKeyShares cannot be null");
         }
 
         if (updateToken.items().size() != updateTupleKeyShares.length) {
@@ -42,7 +43,7 @@ public final class UpdateService {
             UpdateTokenItem item = updateToken.items().get(i);
             IndexAddress address = item.address();
 
-            state.invertedIndexStore().put(address, item.encryptedTuple());
+            state.invertedIndexStore().put(address, item.indexEntry());
             state.keyShareStore().putUpdateTupleShare(address, updateTupleKeyShares[i]);
         }
     }

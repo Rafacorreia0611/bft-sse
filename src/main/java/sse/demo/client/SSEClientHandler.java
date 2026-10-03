@@ -1,7 +1,6 @@
 package sse.demo.client;
 
 import java.nio.file.Path;
-import java.security.interfaces.RSAPrivateKey;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -166,7 +165,6 @@ public final class SSEClientHandler {
         ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
         State state = stateRequest.state();
         SecretKey masterKey = stateRequest.masterKey();
-        RSAPrivateKey trapdoorPrivateKey = stateRequest.trapdoorPrivateKey();
         if (metrics != null) {
             metrics.recordStateRequestLatency(System.nanoTime() - phaseStart);
         }
@@ -203,8 +201,6 @@ public final class SSEClientHandler {
             phaseStart = startTiming(metrics);
             PreparedUpdateRequest preparedUpdateRequest = sseClientFacade.prepareUpdateRequest(
                     masterKey,
-                    trapdoorPrivateKey,
-                    state,
                     oldBlock.keywordState(),
                     canonicalUpdate
             );

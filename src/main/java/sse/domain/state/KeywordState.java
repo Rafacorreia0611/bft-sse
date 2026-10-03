@@ -7,12 +7,15 @@ import sse.domain.id.SearchTokenValue;
 
 public final class KeywordState implements Serializable {
 
+    public static final int STATE_LENGTH_BYTES = 16;
+
     private final SearchTokenValue currentToken;
     private final int counter;
 
     public KeywordState(SearchTokenValue currentToken, int counter) {
-        if (currentToken == null) {
-            throw new IllegalArgumentException("currentToken cannot be null");
+        if (currentToken == null || currentToken.value().length != STATE_LENGTH_BYTES) {
+            throw new IllegalArgumentException(
+                    "currentToken must be exactly " + STATE_LENGTH_BYTES + " bytes");
         }
         if (counter <= 0) {
             throw new IllegalArgumentException("counter must be greater than zero");

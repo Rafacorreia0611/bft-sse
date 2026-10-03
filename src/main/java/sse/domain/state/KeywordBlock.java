@@ -65,16 +65,18 @@ public final class KeywordBlock implements Serializable {
 
         try (ByteArrayInputStream bis = new ByteArrayInputStream(serializedBlock);
              DataInputStream in = new DataInputStream(bis)) {
-            boolean locked = in.readUnsignedByte() == 1;
-            boolean hasState = in.readUnsignedByte() == 1;
+            boolean locked = readFlag(in, "lock");
+            boolean hasState = readFlag(in, "state presence");
             if (!hasState) {
                 return new KeywordBlock(locked, null);
             }
 
             int counter = in.readInt();
             int tokenLength = in.readInt();
-            if (tokenLength <= 0) {
-                throw new IllegalArgumentException("Keyword block token length must be greater than zero");
+            if (tokenLength != KeywordState.STATE_LENGTH_BYTES) {
+                throw new IllegalArgumentException(
+                        "Keyword block state must be exactly "
+                                + KeywordState.STATE_LENGTH_BYTES + " bytes");
             }
 
             byte[] token = new byte[tokenLength];
@@ -83,6 +85,14 @@ public final class KeywordBlock implements Serializable {
         } catch (IOException e) {
             throw new RuntimeException("Error deserializing keyword block", e);
         }
+    }
+
+    private static boolean readFlag(DataInputStream in, String name) throws IOException {
+        int value = in.readUnsignedByte();
+        if (value != 0 && value != 1) {
+            throw new IllegalArgumentException("Keyword block " + name + " flag must be 0 or 1");
+        }
+        return value == 1;
     }
 
     @Override

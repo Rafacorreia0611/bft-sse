@@ -3,10 +3,7 @@ package sse.facade;
 import java.io.IOException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
-import java.security.KeyPair;
 import java.security.NoSuchAlgorithmException;
-import java.security.interfaces.RSAPrivateKey;
-import java.security.interfaces.RSAPublicKey;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -18,7 +15,6 @@ import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 
 import sse.crypto.KeywordLocationMapEncryption;
-import sse.crypto.TrapdoorPermutation;
 import sse.domain.state.EncryptedKeywordLocationMap;
 import sse.domain.update.EncryptedUpdateTuple;
 import sse.domain.setup.InitializationMaterial;
@@ -54,7 +50,6 @@ public final class SSEClientFacade {
         }
 
         SecretKey masterKey = generateMasterKey();
-        KeyPair trapdoorKeyPair = TrapdoorPermutation.generateKeyPair();
 
         KeywordLocationMap keywordLocationMap = generateKeywordLocationMap(vocabularyPath);
         EncryptedKeywordLocationMap encryptedKeywordLocationMap =
@@ -63,8 +58,6 @@ public final class SSEClientFacade {
         return new PreparedInitialization(
                 new InitializationMaterial(
                         masterKey,
-                        (RSAPublicKey) trapdoorKeyPair.getPublic(),
-                        (RSAPrivateKey) trapdoorKeyPair.getPrivate(),
                         encryptedKeywordLocationMap
                 ),
                 keywordLocationMap.oramCapacity()
@@ -90,12 +83,10 @@ public final class SSEClientFacade {
         return keywordLocationService.resolveLocation(masterKey, state, normalizedKeyword);
     }
 
-    public PreparedUpdateRequest prepareUpdateRequest(SecretKey masterKey, RSAPrivateKey trapdoorPrivateKey,
-                                                      State state, KeywordState keywordState, KeywordUpdate update) {
+    public PreparedUpdateRequest prepareUpdateRequest(SecretKey masterKey, KeywordState keywordState,
+                                                      KeywordUpdate update) {
         return updateTokenService.prepareUpdateRequest(
                 masterKey,
-                trapdoorPrivateKey,
-                state,
                 keywordState,
                 update
         );

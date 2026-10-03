@@ -7,7 +7,6 @@ import java.io.ObjectInput;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
-import java.security.interfaces.RSAPrivateKey;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -20,7 +19,6 @@ import javax.crypto.spec.SecretKeySpec;
 import confidential.client.ConfidentialServiceProxy;
 import confidential.client.Response;
 import sse.crypto.Prf;
-import sse.crypto.TrapdoorPermutation;
 import sse.demo.messages.RequestType;
 import sse.demo.messages.ResponseStatus;
 import sse.domain.update.EncryptedUpdateTuple;
@@ -59,12 +57,10 @@ public final class ConfidentialClientAdapter {
         return sendStatusOnlyRequest(
                 RequestType.INIT_STATE,
                 new InitialStatePayload(
-                        TrapdoorPermutation.encodePublicKey(initializationMaterial.trapdoorPublicKey()),
                         initializationMaterial.encryptedKeywordLocationMap()
                 ).serialize(),
                 new byte[][] {
-                        initializationMaterial.masterKey().getEncoded(),
-                        TrapdoorPermutation.encodePrivateKey(initializationMaterial.trapdoorPrivateKey())
+                        initializationMaterial.masterKey().getEncoded()
                 }
         );
     }
@@ -103,16 +99,11 @@ public final class ConfidentialClientAdapter {
             if (state == null) {
                 throw new RuntimeException("State missing from response");
             }
-            if (response.getConfidentialData() == null || response.getConfidentialData().length < 2) {
-                throw new RuntimeException("State keys missing from response");
+            if (response.getConfidentialData() == null || response.getConfidentialData().length != 1) {
+                throw new RuntimeException("State response must contain exactly one master key");
             }
             SecretKey masterKey = new SecretKeySpec(response.getConfidentialData()[0], Prf.ALGORITHM);
-            RSAPrivateKey trapdoorPrivateKey = TrapdoorPermutation.decodePrivateKey(response.getConfidentialData()[1]);
-            return new StateRequestResult(
-                    state,
-                    masterKey,
-                    trapdoorPrivateKey
-            );
+            return new StateRequestResult(state, masterKey);
         } catch (SecretSharingException e) {
             throw new RuntimeException("Error invoking STATE operation", e);
         }
@@ -252,12 +243,10 @@ public final class ConfidentialClientAdapter {
     public static final class StateRequestResult {
         private final State state;
         private final SecretKey masterKey;
-        private final RSAPrivateKey trapdoorPrivateKey;
 
-        private StateRequestResult(State state, SecretKey masterKey, RSAPrivateKey trapdoorPrivateKey) {
+        private StateRequestResult(State state, SecretKey masterKey) {
             this.state = state;
             this.masterKey = masterKey;
-            this.trapdoorPrivateKey = trapdoorPrivateKey;
         }
 
         public State state() {
@@ -266,10 +255,6 @@ public final class ConfidentialClientAdapter {
 
         public SecretKey masterKey() {
             return masterKey;
-        }
-
-        public RSAPrivateKey trapdoorPrivateKey() {
-            return trapdoorPrivateKey;
         }
     }
 

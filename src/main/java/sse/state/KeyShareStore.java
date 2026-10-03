@@ -12,12 +12,10 @@ public final class KeyShareStore {
 
     private Map<IndexAddress, VerifiableShare> updateTupleShares;
     private VerifiableShare masterKeyShare;
-    private VerifiableShare trapdoorPrivateKeyShare;
 
     public KeyShareStore() {
         this.updateTupleShares = new LinkedHashMap<>();
         this.masterKeyShare = null;
-        this.trapdoorPrivateKeyShare = null;
     }
 
     public VerifiableShare getUpdateTupleShare(IndexAddress address) {
@@ -40,27 +38,14 @@ public final class KeyShareStore {
         masterKeyShare = share;
     }
 
-    public VerifiableShare trapdoorPrivateKeyShare() {
-        return trapdoorPrivateKeyShare;
-    }
-
-    public boolean hasTrapdoorPrivateKeyShare() {
-        return trapdoorPrivateKeyShare != null;
-    }
-
-    public void setTrapdoorPrivateKeyShare(VerifiableShare share) {
-        trapdoorPrivateKeyShare = share;
-    }
-
     public List<IndexAddress> snapshotUpdateTupleShareOrder() {
         return new ArrayList<>(updateTupleShares.keySet());
     }
 
-    public VerifiableShare[] sharesInOrder(List<IndexAddress> updateTupleShareOrder, boolean includeMasterKeyShare,
-                                           boolean includeTrapdoorPrivateKeyShare) {
+    public VerifiableShare[] sharesInOrder(List<IndexAddress> updateTupleShareOrder,
+                                           boolean includeMasterKeyShare) {
         int size = updateTupleShareOrder.size()
-                + (includeMasterKeyShare ? 1 : 0)
-                + (includeTrapdoorPrivateKeyShare ? 1 : 0);
+                + (includeMasterKeyShare ? 1 : 0);
         if (size == 0) {
             return new VerifiableShare[0];
         }
@@ -69,9 +54,6 @@ public final class KeyShareStore {
         int index = 0;
         if (includeMasterKeyShare) {
             shares[index++] = masterKeyShare;
-        }
-        if (includeTrapdoorPrivateKeyShare) {
-            shares[index++] = trapdoorPrivateKeyShare;
         }
         for (IndexAddress address : updateTupleShareOrder) {
             shares[index++] = updateTupleShares.get(address);

@@ -14,7 +14,7 @@ import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 
-import sse.crypto.Prf;
+import sse.crypto.KeywordKeyDerivation;
 import sse.crypto.TupleEncryption;
 import sse.domain.update.EncryptedUpdateTuple;
 import sse.domain.state.KeywordState;
@@ -22,8 +22,6 @@ import sse.domain.search.SearchToken;
 import sse.domain.update.UpdateTuple;
 
 public final class SearchTokenService {
-
-    private static final String ADDRESS_KEY_LABEL = "AddressKey";
 
     public SearchToken generateSearchToken(SecretKey masterKey, KeywordState keywordState, String keyword) {
         if (masterKey == null || keyword == null) {
@@ -33,9 +31,8 @@ public final class SearchTokenService {
             return null;
         }
 
-        byte[] addressKey = Prf.prf(masterKey, ADDRESS_KEY_LABEL);
-        byte[] keywordAddressKey = Prf.prf(addressKey, keyword);
-        return new SearchToken(keywordAddressKey, keywordState.currentToken(), keywordState.counter());
+        byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(masterKey, keyword);
+        return new SearchToken(keywordKey, keywordState.currentToken(), keywordState.counter());
     }
 
     public UpdateTuple decryptUpdateTuple(SecretKey key, byte[] iv, EncryptedUpdateTuple encryptedTuple)
