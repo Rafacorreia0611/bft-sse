@@ -1,17 +1,12 @@
 package sse.service.client;
 
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.crypto.BadPaddingException;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
+import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 
 import sse.crypto.KeywordKeyDerivation;
@@ -35,19 +30,13 @@ public final class SearchTokenService {
         return new SearchToken(keywordKey, keywordState.currentToken(), keywordState.counter());
     }
 
-    public UpdateTuple decryptUpdateTuple(SecretKey key, byte[] iv, EncryptedUpdateTuple encryptedTuple)
-            throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException,
-            InvalidKeyException, ClassNotFoundException, IllegalBlockSizeException, java.io.IOException,
-            BadPaddingException {
-        return TupleEncryption.decryptTuple(key, iv, encryptedTuple.encryptedTuple());
-    }
-
     public List<String> extractAddedDocIds(Map<EncryptedUpdateTuple, SecretKey> updates) {
         if (updates == null) {
             throw new IllegalArgumentException("updates cannot be null");
         }
 
         Set<String> activeDocIds = new LinkedHashSet<>();
+        Cipher tupleCipher = TupleEncryption.createCipher();
         for (Map.Entry<EncryptedUpdateTuple, SecretKey> entry : updates.entrySet()) {
             if (entry == null || entry.getKey() == null || entry.getValue() == null) {
                 continue;
@@ -55,7 +44,11 @@ public final class SearchTokenService {
 
             UpdateTuple update;
             try {
-                update = decryptUpdateTuple(entry.getValue(), entry.getKey().iv(), entry.getKey());
+                update = TupleEncryption.decryptTuple(
+                        tupleCipher,
+                        entry.getValue(),
+                        entry.getKey().iv(),
+                        entry.getKey().encryptedTuple());
             } catch (Exception e) {
                 throw new IllegalStateException("Failed to decrypt update tuple", e);
             }

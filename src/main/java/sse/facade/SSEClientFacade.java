@@ -1,17 +1,11 @@
 package sse.facade;
 
-import java.io.IOException;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
-import javax.crypto.BadPaddingException;
-import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.KeyGenerator;
-import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 
 import sse.crypto.KeywordLocationMapEncryption;
@@ -25,7 +19,6 @@ import sse.domain.update.KeywordUpdate;
 import sse.domain.update.PreparedUpdateRequest;
 import sse.domain.search.SearchToken;
 import sse.domain.state.State;
-import sse.domain.update.UpdateTuple;
 import sse.service.client.KeywordLocationService;
 import sse.service.client.SearchTokenService;
 import sse.service.client.UpdateTokenService;
@@ -62,13 +55,6 @@ public final class SSEClientFacade {
                 ),
                 keywordLocationMap.oramCapacity()
         );
-    }
-
-    public UpdateTuple decryptUpdateTuple(SecretKey key, byte[] iv, EncryptedUpdateTuple encryptedTuple)
-            throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException,
-            InvalidKeyException, ClassNotFoundException, IllegalBlockSizeException, IOException,
-            BadPaddingException {
-        return searchTokenService.decryptUpdateTuple(key, iv, encryptedTuple);
     }
 
     public SearchToken generateSearchToken(SecretKey masterKey, KeywordState keywordState, String keyword) {

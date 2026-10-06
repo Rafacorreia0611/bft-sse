@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
+import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -73,14 +75,20 @@ public class UpdateTokenServiceTest {
         SearchTokenValue currentToken = request.keywordState().currentToken();
         List<UpdateTokenItem> items = request.updateToken().items();
         byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(MASTER_KEY, keyword);
-        byte[] h1Key = KeywordKeyDerivation.deriveH1Key(keywordKey);
+        Mac addressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac keyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
+        Cipher stateCipher = StatePermutation.createCipher();
 
         for (int i = items.size() - 1; i >= 0; i--) {
             UpdateTokenItem item = items.get(i);
             assertEquals(
-                    KeywordKeyDerivation.deriveAddress(h1Key, currentToken),
+                    KeywordKeyDerivation.deriveAddress(addressMac, currentToken),
                     item.address());
-            currentToken = recoverPreviousToken(item, currentToken, keyword);
+            currentToken = recoverPreviousToken(
+                    item,
+                    currentToken,
+                    keyMaskMac,
+                    stateCipher);
         }
     }
 
@@ -88,13 +96,24 @@ public class UpdateTokenServiceTest {
                                                           SearchTokenValue currentToken,
                                                           String keyword) {
         byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(MASTER_KEY, keyword);
-        byte[] h2Key = KeywordKeyDerivation.deriveH2Key(keywordKey);
-        byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(h2Key, currentToken);
+        return recoverPreviousToken(
+                item,
+                currentToken,
+                KeywordKeyDerivation.createKeyMaskMac(keywordKey),
+                StatePermutation.createCipher());
+    }
+
+    private static SearchTokenValue recoverPreviousToken(UpdateTokenItem item,
+                                                          SearchTokenValue currentToken,
+                                                          Mac keyMaskMac,
+                                                          Cipher stateCipher) {
+        byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keyMaskMac, currentToken);
         byte[] ephemeralKey = KeywordKeyDerivation.unmaskKey(
                 item.indexEntry().maskedEphemeralKey(),
                 keyMask);
 
         return StatePermutation.backward(
+                stateCipher,
                 new SecretKeySpec(ephemeralKey, "AES"),
                 currentToken);
     }
@@ -102,9 +121,11 @@ public class UpdateTokenServiceTest {
     private static void verifyEncryptedTuples(PreparedUpdateRequest request,
                                                List<String> expectedDocIds,
                                                UpdateOp expectedOperation) throws Exception {
+        Cipher tupleCipher = TupleEncryption.createCipher();
         for (int i = 0; i < expectedDocIds.size(); i++) {
             IndexEntry entry = request.updateToken().items().get(i).indexEntry();
             UpdateTuple tuple = TupleEncryption.decryptTuple(
+                    tupleCipher,
                     request.tupleKeys().get(i),
                     entry.encryptedTuple().iv(),
                     entry.encryptedTuple().encryptedTuple());

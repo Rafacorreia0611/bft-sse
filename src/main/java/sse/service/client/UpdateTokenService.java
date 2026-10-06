@@ -1,14 +1,10 @@
 package sse.service.client;
 
-import java.io.IOException;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 
 import sse.crypto.KeywordKeyDerivation;
@@ -28,27 +24,20 @@ import sse.domain.update.UpdateTuple;
 
 public final class UpdateTokenService {
 
-    private SecretKey generateTupleSecretKey() {
-        return TupleEncryption.generateRandomKey();
-    }
-
-    private byte[] generateTupleIv() {
-        return TupleEncryption.generateIv();
-    }
-
-    private EncryptedUpdateTuple encryptUpdateTuple(SecretKey key, byte[] iv, UpdateTuple tuple)
-            throws NoSuchAlgorithmException, NoSuchPaddingException, InvalidKeyException,
-            InvalidAlgorithmParameterException, IOException, IllegalBlockSizeException {
-        return new EncryptedUpdateTuple(TupleEncryption.encryptTuple(key, iv, tuple), iv);
-    }
-
-    private EncryptedUpdateTuple generateEncryptedUpdateTuple(String docId, UpdateOp operation, SecretKey encryptionKey) {
+    private EncryptedUpdateTuple encryptUpdateTuple(Cipher cipher, String docId,
+                                                     UpdateOp operation, SecretKey key) {
         if (operation == null) {
             throw new IllegalArgumentException("operation cannot be null");
         }
-        byte[] iv = generateTupleIv();
+        byte[] iv = TupleEncryption.generateIv();
         try {
-            return encryptUpdateTuple(encryptionKey, iv, new UpdateTuple(docId, operation));
+            return new EncryptedUpdateTuple(
+                    TupleEncryption.encryptTuple(
+                            cipher,
+                            key,
+                            iv,
+                            new UpdateTuple(docId, operation)),
+                    iv);
         } catch (Exception e) {
             throw new RuntimeException("Error encrypting update tuple", e);
         }
@@ -60,12 +49,14 @@ public final class UpdateTokenService {
             throw new IllegalArgumentException("masterKey and update cannot be null");
         }
 
-        List<UpdateTokenItem> items = new ArrayList<UpdateTokenItem>();
-        List<SecretKey> tupleKeys = new ArrayList<SecretKey>();
+        List<UpdateTokenItem> items = new ArrayList<UpdateTokenItem>(update.docIds().size());
+        List<SecretKey> tupleKeys = new ArrayList<SecretKey>(update.docIds().size());
 
         byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(masterKey, update.keyword());
-        byte[] keywordH1Key = KeywordKeyDerivation.deriveH1Key(keywordKey);
-        byte[] keywordH2Key = KeywordKeyDerivation.deriveH2Key(keywordKey);
+        Mac addressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac keyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
+        Cipher stateCipher = StatePermutation.createCipher();
+        Cipher tupleCipher = TupleEncryption.createCipher();
 
         SearchTokenValue currentToken = keywordState == null
                 ? StatePermutation.generateRandomState()
@@ -73,14 +64,17 @@ public final class UpdateTokenService {
         int currentCounter = keywordState == null ? 0 : keywordState.counter();
 
         for (String docId : update.docIds()) {
-            SecretKey tupleKey = generateTupleSecretKey();
+            SecretKey tupleKey = TupleEncryption.generateRandomKey();
             EncryptedUpdateTuple encryptedTuple =
-                    generateEncryptedUpdateTuple(docId, update.operation(), tupleKey);
+                    encryptUpdateTuple(tupleCipher, docId, update.operation(), tupleKey);
 
             SecretKey ephemeralKey = StatePermutation.generateKey();
-            SearchTokenValue nextToken = StatePermutation.forward(ephemeralKey, currentToken);
-            IndexAddress address = KeywordKeyDerivation.deriveAddress(keywordH1Key, nextToken);
-            byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keywordH2Key, nextToken);
+            SearchTokenValue nextToken = StatePermutation.forward(
+                    stateCipher,
+                    ephemeralKey,
+                    currentToken);
+            IndexAddress address = KeywordKeyDerivation.deriveAddress(addressMac, nextToken);
+            byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keyMaskMac, nextToken);
             byte[] maskedEphemeralKey = KeywordKeyDerivation.maskKey(
                     ephemeralKey.getEncoded(),
                     keyMask);

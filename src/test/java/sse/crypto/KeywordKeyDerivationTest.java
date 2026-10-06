@@ -7,6 +7,7 @@ import static org.junit.Assert.assertFalse;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -29,13 +30,7 @@ public class KeywordKeyDerivationTest {
 
         assertArrayEquals(firstKeywordKey, sameKeywordKey);
         assertFalse(Arrays.equals(firstKeywordKey, otherKeywordKey));
-
-        byte[] h1Key = KeywordKeyDerivation.deriveH1Key(firstKeywordKey);
-        byte[] h2Key = KeywordKeyDerivation.deriveH2Key(firstKeywordKey);
-
-        assertEquals(KeywordKeyDerivation.KEY_LENGTH_BYTES, h1Key.length);
-        assertEquals(KeywordKeyDerivation.KEY_LENGTH_BYTES, h2Key.length);
-        assertFalse(Arrays.equals(h1Key, h2Key));
+        assertEquals(KeywordKeyDerivation.KEY_LENGTH_BYTES, firstKeywordKey.length);
     }
 
     @Test
@@ -49,23 +44,49 @@ public class KeywordKeyDerivationTest {
     @Test
     public void derivesStableAddressAndSixteenByteMask() {
         byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(MASTER_KEY, "document");
-        byte[] h1Key = KeywordKeyDerivation.deriveH1Key(keywordKey);
-        byte[] h2Key = KeywordKeyDerivation.deriveH2Key(keywordKey);
+        Mac addressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac sameAddressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac keyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
         SearchTokenValue state = fixedState();
 
-        IndexAddress firstAddress = KeywordKeyDerivation.deriveAddress(h1Key, state);
-        IndexAddress sameAddress = KeywordKeyDerivation.deriveAddress(h1Key, state);
-        byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(h2Key, state);
+        IndexAddress firstAddress = KeywordKeyDerivation.deriveAddress(addressMac, state);
+        IndexAddress sameAddress = KeywordKeyDerivation.deriveAddress(sameAddressMac, state);
+        byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keyMaskMac, state);
 
         assertEquals(firstAddress, sameAddress);
         assertEquals(StatePermutation.KEY_LENGTH_BYTES, keyMask.length);
+        assertFalse(Arrays.equals(
+                Arrays.copyOf(firstAddress.value(), StatePermutation.KEY_LENGTH_BYTES),
+                keyMask));
+    }
+
+    @Test
+    public void reusableMacsRemainStableAcrossStates() {
+        byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(MASTER_KEY, "document");
+        Mac addressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac sameAddressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac keyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
+        Mac sameKeyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
+        SearchTokenValue[] states = {
+                fixedState(),
+                new SearchTokenValue("another state!!!".getBytes(StandardCharsets.UTF_8))
+        };
+
+        for (SearchTokenValue state : states) {
+            assertEquals(
+                    KeywordKeyDerivation.deriveAddress(sameAddressMac, state),
+                    KeywordKeyDerivation.deriveAddress(addressMac, state));
+            assertArrayEquals(
+                    KeywordKeyDerivation.deriveKeyMask(sameKeyMaskMac, state),
+                    KeywordKeyDerivation.deriveKeyMask(keyMaskMac, state));
+        }
     }
 
     @Test
     public void unmaskingRecoversEphemeralKey() {
         byte[] keywordKey = KeywordKeyDerivation.deriveKeywordKey(MASTER_KEY, "document");
-        byte[] h2Key = KeywordKeyDerivation.deriveH2Key(keywordKey);
-        byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(h2Key, fixedState());
+        Mac keyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
+        byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keyMaskMac, fixedState());
         byte[] ephemeralKey = "16-byte AES key!".getBytes(StandardCharsets.UTF_8);
 
         byte[] maskedKey = KeywordKeyDerivation.maskKey(ephemeralKey, keyMask);

@@ -127,7 +127,11 @@ public class UpdateServiceTest {
         SecretKey tupleKey = TupleEncryption.generateRandomKey();
         byte[] iv = TupleEncryption.generateIv();
         EncryptedUpdateTuple encryptedTuple = new EncryptedUpdateTuple(
-                TupleEncryption.encryptTuple(tupleKey, iv, new UpdateTuple("document", UpdateOp.ADD)),
+                TupleEncryption.encryptTuple(
+                        TupleEncryption.createCipher(),
+                        tupleKey,
+                        iv,
+                        new UpdateTuple("document", UpdateOp.ADD)),
                 iv);
         byte[] maskedKey = new byte[16];
         Arrays.fill(maskedKey, maskedKeyValue);

@@ -2,6 +2,7 @@ package sse.crypto;
 
 import java.util.Arrays;
 
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 
 import sse.domain.id.IndexAddress;
@@ -31,27 +32,35 @@ public final class KeywordKeyDerivation {
         return Prf.prf(keywordRootKey, keyword);
     }
 
-    public static byte[] deriveH1Key(byte[] keywordKey) {
+    private static byte[] deriveH1Key(byte[] keywordKey) {
         validateDerivedKey(keywordKey, "keywordKey");
         return Prf.prf(keywordKey, H1_KEY_LABEL);
     }
 
-    public static byte[] deriveH2Key(byte[] keywordKey) {
+    private static byte[] deriveH2Key(byte[] keywordKey) {
         validateDerivedKey(keywordKey, "keywordKey");
         return Prf.prf(keywordKey, H2_KEY_LABEL);
     }
 
-    public static IndexAddress deriveAddress(byte[] keywordH1Key, SearchTokenValue state) {
-        validateDerivedKey(keywordH1Key, "keywordH1Key");
-        validateState(state);
-        return new IndexAddress(Prf.prf(keywordH1Key, state.value()));
+    public static Mac createAddressMac(byte[] keywordKey) {
+        return Prf.createMac(deriveH1Key(keywordKey));
     }
 
-    public static byte[] deriveKeyMask(byte[] keywordH2Key, SearchTokenValue state) {
-        validateDerivedKey(keywordH2Key, "keywordH2Key");
+    public static Mac createKeyMaskMac(byte[] keywordKey) {
+        return Prf.createMac(deriveH2Key(keywordKey));
+    }
+
+    public static IndexAddress deriveAddress(Mac addressMac, SearchTokenValue state) {
+        validateMac(addressMac, "addressMac");
+        validateState(state);
+        return new IndexAddress(Prf.prf(addressMac, state.value()));
+    }
+
+    public static byte[] deriveKeyMask(Mac keyMaskMac, SearchTokenValue state) {
+        validateMac(keyMaskMac, "keyMaskMac");
         validateState(state);
         return Arrays.copyOf(
-                Prf.prf(keywordH2Key, state.value()),
+                Prf.prf(keyMaskMac, state.value()),
                 StatePermutation.KEY_LENGTH_BYTES);
     }
 
@@ -81,6 +90,12 @@ public final class KeywordKeyDerivation {
         if (key == null || key.length != StatePermutation.KEY_LENGTH_BYTES) {
             throw new IllegalArgumentException(
                     name + " must be exactly " + StatePermutation.KEY_LENGTH_BYTES + " bytes");
+        }
+    }
+
+    private static void validateMac(Mac mac, String name) {
+        if (mac == null) {
+            throw new IllegalArgumentException(name + " cannot be null");
         }
     }
 

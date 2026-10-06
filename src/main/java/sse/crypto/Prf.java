@@ -1,6 +1,5 @@
 package sse.crypto;
 
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 
@@ -16,25 +15,15 @@ public final class Prf {
         // Utility class, prevent instantiation
     }
 
-    public static byte[] prf(SecretKey key, byte[] input) {
-        try {
-            Mac hmac = Mac.getInstance(ALGORITHM);
-            hmac.init(key);
-            return hmac.doFinal(input);
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("HMAC-SHA256 PRF failed", e);
-        }
+    private static byte[] prf(SecretKey key, byte[] input) {
+        return prf(createMac(key), input);
     }
 
     public static byte[] prf(SecretKey key, String input) {
         return prf(key, input.getBytes(StandardCharsets.UTF_8));
     }
 
-    public static byte[] prf(SecretKey key, int input) {
-        return prf(key, ByteBuffer.allocate(Integer.BYTES).putInt(input).array());
-    }
-    
-    public static byte[] prf(byte[] keyBytes, byte[] input) {
+    private static byte[] prf(byte[] keyBytes, byte[] input) {
         return prf(new SecretKeySpec(keyBytes, ALGORITHM), input);
     }
 
@@ -42,8 +31,31 @@ public final class Prf {
         return prf(keyBytes, input.getBytes(StandardCharsets.UTF_8));
     }
 
-    public static byte[] prf(byte[] keyBytes, int input) {
-        return prf(keyBytes, ByteBuffer.allocate(Integer.BYTES).putInt(input).array());
+    public static Mac createMac(byte[] keyBytes) {
+        if (keyBytes == null) {
+            throw new IllegalArgumentException("keyBytes cannot be null");
+        }
+        return createMac(new SecretKeySpec(keyBytes, ALGORITHM));
+    }
+
+    public static byte[] prf(Mac mac, byte[] input) {
+        if (mac == null || input == null) {
+            throw new IllegalArgumentException("mac and input cannot be null");
+        }
+        return mac.doFinal(input);
+    }
+
+    private static Mac createMac(SecretKey key) {
+        if (key == null) {
+            throw new IllegalArgumentException("key cannot be null");
+        }
+        try {
+            Mac mac = Mac.getInstance(ALGORITHM);
+            mac.init(key);
+            return mac;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("HMAC-SHA256 PRF initialization failed", e);
+        }
     }
 
 }

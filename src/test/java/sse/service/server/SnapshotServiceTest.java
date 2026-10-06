@@ -68,6 +68,7 @@ public class SnapshotServiceTest {
         assertEquals(
                 new UpdateTuple("document", UpdateOp.ADD),
                 TupleEncryption.decryptTuple(
+                        TupleEncryption.createCipher(),
                         tupleKey,
                         restoredEntry.encryptedTuple().iv(),
                         restoredEntry.encryptedTuple().encryptedTuple()));
@@ -108,7 +109,11 @@ public class SnapshotServiceTest {
     private static IndexEntry indexEntry(SecretKey tupleKey) throws Exception {
         byte[] iv = TupleEncryption.generateIv();
         EncryptedUpdateTuple encryptedTuple = new EncryptedUpdateTuple(
-                TupleEncryption.encryptTuple(tupleKey, iv, new UpdateTuple("document", UpdateOp.ADD)),
+                TupleEncryption.encryptTuple(
+                        TupleEncryption.createCipher(),
+                        tupleKey,
+                        iv,
+                        new UpdateTuple("document", UpdateOp.ADD)),
                 iv);
         return new IndexEntry(encryptedTuple, new byte[16]);
     }

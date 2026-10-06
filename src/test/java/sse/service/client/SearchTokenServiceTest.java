@@ -5,6 +5,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -13,9 +17,13 @@ import org.junit.Test;
 
 import sse.crypto.KeywordKeyDerivation;
 import sse.crypto.Prf;
+import sse.crypto.TupleEncryption;
 import sse.domain.id.SearchTokenValue;
 import sse.domain.search.SearchToken;
 import sse.domain.state.KeywordState;
+import sse.domain.update.EncryptedUpdateTuple;
+import sse.domain.update.UpdateOp;
+import sse.domain.update.UpdateTuple;
 
 public class SearchTokenServiceTest {
 
@@ -44,5 +52,32 @@ public class SearchTokenServiceTest {
     @Test
     public void returnsNullWhenKeywordHasNoState() {
         assertNull(service.generateSearchToken(MASTER_KEY, null, "document"));
+    }
+
+    @Test
+    public void processesMultipleEncryptedUpdatesWithReusableCipher() throws Exception {
+        Map<EncryptedUpdateTuple, SecretKey> updates =
+                new LinkedHashMap<EncryptedUpdateTuple, SecretKey>();
+        addEncryptedUpdate(updates, "doc-1", UpdateOp.ADD);
+        addEncryptedUpdate(updates, "doc-2", UpdateOp.ADD);
+        addEncryptedUpdate(updates, "doc-1", UpdateOp.DEL);
+
+        List<String> result = service.extractAddedDocIds(updates);
+
+        assertEquals(Arrays.asList("doc-2"), result);
+    }
+
+    private static void addEncryptedUpdate(Map<EncryptedUpdateTuple, SecretKey> updates,
+                                           String docId, UpdateOp operation) throws Exception {
+        SecretKey key = TupleEncryption.generateRandomKey();
+        byte[] iv = TupleEncryption.generateIv();
+        EncryptedUpdateTuple encryptedTuple = new EncryptedUpdateTuple(
+                TupleEncryption.encryptTuple(
+                        TupleEncryption.createCipher(),
+                        key,
+                        iv,
+                        new UpdateTuple(docId, operation)),
+                iv);
+        updates.put(encryptedTuple, key);
     }
 }

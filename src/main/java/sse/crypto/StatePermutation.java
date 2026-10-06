@@ -34,20 +34,33 @@ public final class StatePermutation {
         return new SecretKeySpec(key, KEY_ALGORITHM);
     }
 
-    public static SearchTokenValue forward(SecretKey key, SearchTokenValue previousState) {
-        return apply(Cipher.ENCRYPT_MODE, key, previousState);
+    public static Cipher createCipher() {
+        try {
+            return Cipher.getInstance(CIPHER_ALGORITHM);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("AES state cipher initialization failed", e);
+        }
     }
 
-    public static SearchTokenValue backward(SecretKey key, SearchTokenValue currentState) {
-        return apply(Cipher.DECRYPT_MODE, key, currentState);
+    public static SearchTokenValue forward(Cipher cipher, SecretKey key,
+                                           SearchTokenValue previousState) {
+        return apply(cipher, Cipher.ENCRYPT_MODE, key, previousState);
     }
 
-    private static SearchTokenValue apply(int mode, SecretKey key, SearchTokenValue state) {
+    public static SearchTokenValue backward(Cipher cipher, SecretKey key,
+                                            SearchTokenValue currentState) {
+        return apply(cipher, Cipher.DECRYPT_MODE, key, currentState);
+    }
+
+    private static SearchTokenValue apply(Cipher cipher, int mode, SecretKey key,
+                                          SearchTokenValue state) {
+        if (cipher == null) {
+            throw new IllegalArgumentException("cipher cannot be null");
+        }
         validateKey(key);
         validateState(state);
 
         try {
-            Cipher cipher = Cipher.getInstance(CIPHER_ALGORITHM);
             cipher.init(mode, key);
             return new SearchTokenValue(cipher.doFinal(state.value()));
         } catch (GeneralSecurityException e) {

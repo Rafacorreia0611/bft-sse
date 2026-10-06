@@ -3,6 +3,8 @@ package sse.service.server;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
+import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -28,11 +30,13 @@ public final class SearchService {
         Deque<EncryptedUpdateTuple> encryptedTuples = new ArrayDeque<EncryptedUpdateTuple>();
         Deque<VerifiableShare> updateTupleKeys = new ArrayDeque<VerifiableShare>();
         SearchTokenValue currentToken = searchToken.currentToken();
-        byte[] keywordH1Key = KeywordKeyDerivation.deriveH1Key(searchToken.keywordKey());
-        byte[] keywordH2Key = KeywordKeyDerivation.deriveH2Key(searchToken.keywordKey());
+        byte[] keywordKey = searchToken.keywordKey();
+        Mac addressMac = KeywordKeyDerivation.createAddressMac(keywordKey);
+        Mac keyMaskMac = KeywordKeyDerivation.createKeyMaskMac(keywordKey);
+        Cipher stateCipher = StatePermutation.createCipher();
 
         for (int i = 0; i < searchToken.counter(); i++) {
-            IndexAddress address = KeywordKeyDerivation.deriveAddress(keywordH1Key, currentToken);
+            IndexAddress address = KeywordKeyDerivation.deriveAddress(addressMac, currentToken);
             IndexEntry indexEntry = state.invertedIndexStore().get(address);
             if (indexEntry == null) {
                 throw new IllegalStateException("Missing index entry in search chain");
@@ -46,12 +50,12 @@ public final class SearchService {
             encryptedTuples.addFirst(indexEntry.encryptedTuple());
             updateTupleKeys.addFirst(updateTupleKey);
 
-            byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keywordH2Key, currentToken);
+            byte[] keyMask = KeywordKeyDerivation.deriveKeyMask(keyMaskMac, currentToken);
             byte[] ephemeralKeyBytes = KeywordKeyDerivation.unmaskKey(
                     indexEntry.maskedEphemeralKey(),
                     keyMask);
             SecretKey ephemeralKey = new SecretKeySpec(ephemeralKeyBytes, "AES");
-            currentToken = StatePermutation.backward(ephemeralKey, currentToken);
+            currentToken = StatePermutation.backward(stateCipher, ephemeralKey, currentToken);
         }
 
         while (!encryptedTuples.isEmpty()) {

@@ -58,7 +58,11 @@ public class IndexEntryTest {
         SecretKey tupleKey = TupleEncryption.generateRandomKey();
         byte[] iv = TupleEncryption.generateIv();
         return new EncryptedUpdateTuple(
-                TupleEncryption.encryptTuple(tupleKey, iv, new UpdateTuple("document", UpdateOp.ADD)),
+                TupleEncryption.encryptTuple(
+                        TupleEncryption.createCipher(),
+                        tupleKey,
+                        iv,
+                        new UpdateTuple("document", UpdateOp.ADD)),
                 iv);
     }
 

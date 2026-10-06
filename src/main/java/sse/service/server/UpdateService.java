@@ -1,6 +1,7 @@
 package sse.service.server;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import sse.domain.id.IndexAddress;
@@ -17,13 +18,14 @@ public final class UpdateService {
                     "state, updateToken and updateTupleKeyShares cannot be null");
         }
 
-        if (updateToken.items().size() != updateTupleKeyShares.length) {
+        List<UpdateTokenItem> items = updateToken.items();
+        if (items.size() != updateTupleKeyShares.length) {
             throw new IllegalArgumentException("Mismatch between update token items and update tuple key shares");
         }
 
-        Set<IndexAddress> batchAddresses = new HashSet<IndexAddress>();
-        for (int i = 0; i < updateToken.items().size(); i++) {
-            UpdateTokenItem item = updateToken.items().get(i);
+        Set<IndexAddress> batchAddresses = new HashSet<IndexAddress>(items.size());
+        for (int i = 0; i < items.size(); i++) {
+            UpdateTokenItem item = items.get(i);
             VerifiableShare updateTupleKeyShare = updateTupleKeyShares[i];
 
             if (item == null || updateTupleKeyShare == null) {
@@ -39,8 +41,8 @@ public final class UpdateService {
             }
         }
 
-        for (int i = 0; i < updateToken.items().size(); i++) {
-            UpdateTokenItem item = updateToken.items().get(i);
+        for (int i = 0; i < items.size(); i++) {
+            UpdateTokenItem item = items.get(i);
             IndexAddress address = item.address();
 
             state.invertedIndexStore().put(address, item.indexEntry());

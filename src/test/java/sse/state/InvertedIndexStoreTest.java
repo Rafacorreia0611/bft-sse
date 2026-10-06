@@ -59,7 +59,11 @@ public class InvertedIndexStoreTest {
         SecretKey tupleKey = TupleEncryption.generateRandomKey();
         byte[] iv = TupleEncryption.generateIv();
         EncryptedUpdateTuple encryptedTuple = new EncryptedUpdateTuple(
-                TupleEncryption.encryptTuple(tupleKey, iv, new UpdateTuple("document", UpdateOp.ADD)),
+                TupleEncryption.encryptTuple(
+                        TupleEncryption.createCipher(),
+                        tupleKey,
+                        iv,
+                        new UpdateTuple("document", UpdateOp.ADD)),
                 iv);
         return new IndexEntry(encryptedTuple, new byte[16]);
     }
