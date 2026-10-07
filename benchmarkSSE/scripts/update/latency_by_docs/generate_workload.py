@@ -17,7 +17,7 @@ from typing import Sequence
 
 
 DEFAULT_SEED = 42
-ROOT_DIR = Path(__file__).resolve().parents[3]
+ROOT_DIR = Path(__file__).resolve().parents[4]
 
 
 @dataclass(frozen=True)

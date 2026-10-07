@@ -2,17 +2,17 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/search_latency_by_docs.properties"
-# Matches METRICS in summarize_search_latency.py.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/latency_by_docs.properties"
+# Matches METRICS in summarize.py.
 N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
 REPLICA_LIST="4,7,10,13"
 ORAM_REPLICAS_OVERRIDE=""
 
-DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/search/run_search_latency_by_docs.sh"
-AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/aggregate_search_latency_by_replicas.py"
-GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/search_latency_by_replicas.gp"
+DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/run_local.sh"
+AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/aggregate_replicas.py"
+GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/latency_by_docs/by_replicas.gp"
 
 usage() {
   cat >&2 <<EOF

@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/search_latency_by_docs.properties"
-# Matches METRICS in summarize_search_latency.py.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/latency_by_docs.properties"
+# Matches METRICS in summarize.py.
 N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
 CONFIG_DIR=""
@@ -303,9 +303,9 @@ load_config() {
   BASE_SUMMARY_PATH="$(resolve_config_path "$SUMMARY_OUTPUT_PATH")"
   BASE_MEAN_PLOT_PATH="$(resolve_config_path "$MEAN_PLOT_OUTPUT_PATH")"
   BASE_MEDIAN_PLOT_PATH="$(resolve_config_path "$MEDIAN_PLOT_OUTPUT_PATH")"
-  ABS_GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/search_latency_by_docs_mean_median.gp"
-  ABS_SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/summarize_search_latency.py"
-  ABS_SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/syntheticDataset.py"
+  ABS_GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/latency_by_docs/mean_median.gp"
+  ABS_SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/summarize.py"
+  ABS_SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/synthetic_dataset.py"
 
   validate_dataset_config
   validate_positive_integer "$REPLICA_COUNT" "sseReplicas"

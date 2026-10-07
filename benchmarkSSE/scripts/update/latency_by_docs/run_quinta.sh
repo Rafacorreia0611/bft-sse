@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/update/update_latency_by_docs.properties"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/update/latency_by_docs.properties"
 DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 DEPLOY_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/quinta_deploy.sh"
 COMMON_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
-SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/syntheticDataset.py"
-UPDATE_WORKLOAD_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/generate_update_workload.py"
-SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/summarize_update_latency_by_docs.py"
-# Matches METRICS in summarize_update_latency_by_docs.py.
+SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/synthetic_dataset.py"
+UPDATE_WORKLOAD_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/generate_workload.py"
+SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/summarize.py"
+# Matches METRICS in summarize.py.
 N_METRICS=8
 
 CONFIG_PATH="$DEFAULT_CONFIG"

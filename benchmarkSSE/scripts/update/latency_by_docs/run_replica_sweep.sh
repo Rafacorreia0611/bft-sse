@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 source "$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 
-DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/update/update_latency_by_docs.properties"
+DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/update/latency_by_docs.properties"
 DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 N_METRICS=8
 
@@ -14,9 +14,9 @@ CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
 REPLICA_LIST="4,7,10"
 ORAM_REPLICAS_OVERRIDE=""
 
-DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/update/run_update_latency_by_docs_quinta.sh"
-AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/aggregate_update_latency_by_replicas.py"
-GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/update/update_latency_by_replicas.gp"
+DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/run_quinta.sh"
+AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/aggregate_replicas.py"
+GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/update/latency_by_docs/by_replicas.gp"
 
 usage() {
   cat >&2 <<EOF
