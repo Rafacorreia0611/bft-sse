@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/latency_by_docs.properties"
+BENCHMARK_CHECKPOINT_PERIOD=10000000
 # Matches METRICS in summarize.py.
 N_METRICS=8
 CONFIG_PATH="$DEFAULT_CONFIG"
@@ -813,6 +814,7 @@ write_local_system_config() {
     -v replica_count="$replica_count" \
     -v fault_count="$(((replica_count - 1) / 3))" \
     -v initial_view="$view" \
+    -v checkpoint_period="$BENCHMARK_CHECKPOINT_PERIOD" \
     '
       /^system\.servers\.num[[:space:]]*=/ {
         print "system.servers.num = " replica_count
@@ -826,9 +828,17 @@ write_local_system_config() {
         print "system.initial.view = " initial_view
         next
       }
+      /^system\.totalordermulticast\.checkpoint_period[[:space:]]*=/ {
+        print "system.totalordermulticast.checkpoint_period = " checkpoint_period
+        next
+      }
       { print }
     ' "$path" > "$tmp_path"
   mv "$tmp_path" "$path"
+
+  grep -qx \
+    "system.totalordermulticast.checkpoint_period = $BENCHMARK_CHECKPOINT_PERIOD" \
+    "$path" || die "Failed to configure checkpoint period in $path"
 }
 
 write_local_hosts_config() {

@@ -12,6 +12,7 @@ ORAM_REPLICA_COUNT=-1
 ORAM_MAX_CONCURRENT_CLIENTS=1
 CLIENT_COUNT=1
 RUN_NAME="latest"
+BENCHMARK_CHECKPOINT_PERIOD=10000000
 
 usage() {
   cat >&2 <<EOF
@@ -339,6 +340,7 @@ write_system_config() {
     -v replica_count="$replica_count" \
     -v fault_count_value="$(fault_count "$replica_count")" \
     -v initial_view_value="$(initial_view "$replica_count")" \
+    -v checkpoint_period="$BENCHMARK_CHECKPOINT_PERIOD" \
     '
       /^system\.servers\.num[[:space:]]*=/ {
         print "system.servers.num = " replica_count
@@ -352,9 +354,17 @@ write_system_config() {
         print "system.initial.view = " initial_view_value
         next
       }
+      /^system\.totalordermulticast\.checkpoint_period[[:space:]]*=/ {
+        print "system.totalordermulticast.checkpoint_period = " checkpoint_period
+        next
+      }
       { print }
     ' "$path" > "$tmp_path"
   mv "$tmp_path" "$path"
+
+  grep -qx \
+    "system.totalordermulticast.checkpoint_period = $BENCHMARK_CHECKPOINT_PERIOD" \
+    "$path" || die "Failed to configure checkpoint period in $path"
 }
 
 write_hosts_config() {
