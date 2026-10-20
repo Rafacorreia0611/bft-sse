@@ -86,71 +86,24 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.newLine();
     }
 
-    public void writeConcurrentSearchHeader() throws IOException {
-        writer.write("scenario,operation,client_count,client_id,client_operation,keyword,result_count,"
-                + "chain_length,start_offset_ns,total_latency_ns,normalization_latency_ns,"
-                + "state_request_latency_ns,address_resolution_latency_ns,oram_read_latency_ns,"
-                + "token_build_latency_ns,search_request_round_trip_latency_ns,"
-                + "result_processing_latency_ns");
-        writer.newLine();
-    }
-
-    public void writeConcurrentSearchSample(String scenarioName,
-                                            BenchmarkOperation operation,
-                                            ConcurrentOperationResult result) throws IOException {
-        SearchOperationMetrics metrics = result.searchMetrics();
-        writer.write(csvValue(scenarioName));
-        writer.write(',');
-        writer.write(csvValue(operation.name()));
-        writer.write(',');
-        writer.write(Integer.toString(result.clientCount()));
-        writer.write(',');
-        writer.write(Integer.toString(result.clientId()));
-        writer.write(',');
-        writer.write(Long.toString(result.clientOperation()));
-        writer.write(',');
-        writer.write(csvValue(result.keyword()));
-        writer.write(',');
-        writer.write(Integer.toString(result.resultCount()));
-        writer.write(',');
-        writer.write(Integer.toString(metrics.observedChainLength()));
-        writer.write(',');
-        writer.write(Long.toString(result.startOffsetNanos()));
-        writer.write(',');
-        writer.write(Long.toString(result.totalLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.normalizationLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.oramReadLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.tokenBuildLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.searchRequestRoundTripLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.resultProcessingLatencyNanos()));
-        writer.newLine();
-    }
-
-    public void writeConcurrentUpdateHeader() throws IOException {
+    public void writeConcurrentHeader() throws IOException {
         writer.write("scenario,operation,client_count,client_id,client_operation,keyword,"
-                + "updated_document_count,chain_length_before,start_offset_ns,total_latency_ns,"
+                + "updated_document_count,observed_chain_length,start_offset_ns,total_latency_ns,"
                 + "normalization_latency_ns,state_request_latency_ns,address_resolution_latency_ns,"
-                + "oram_lock_latency_ns,token_build_latency_ns,update_request_round_trip_latency_ns,"
-                + "oram_publish_latency_ns");
+                + "oram_access_latency_ns,token_build_latency_ns,request_round_trip_latency_ns,"
+                + "result_processing_latency_ns,oram_publish_latency_ns");
         writer.newLine();
     }
 
-    public void writeConcurrentUpdateSample(String scenarioName,
-                                            BenchmarkOperation operation,
-                                            ConcurrentOperationResult result) throws IOException {
-        UpdateOperationMetrics metrics = result.updateMetrics();
+    public void writeConcurrentSample(String scenarioName,
+                                      ConcurrentOperationResult result) throws IOException {
+        boolean search = result.operation() == BenchmarkOperation.SEARCH;
+        SearchOperationMetrics searchMetrics = result.searchMetrics();
+        UpdateOperationMetrics updateMetrics = result.updateMetrics();
+
         writer.write(csvValue(scenarioName));
         writer.write(',');
-        writer.write(csvValue(operation.name()));
+        writer.write(csvValue(result.operation().name()));
         writer.write(',');
         writer.write(Integer.toString(result.clientCount()));
         writer.write(',');
@@ -160,27 +113,47 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(',');
         writer.write(csvValue(result.keyword()));
         writer.write(',');
-        writer.write(Integer.toString(result.updatedDocumentCount()));
+        if (!search) {
+            writer.write(Integer.toString(result.updatedDocumentCount()));
+        }
         writer.write(',');
-        writer.write(Integer.toString(metrics.observedChainLengthBefore()));
+        writer.write(Integer.toString(result.observedChainLength()));
         writer.write(',');
         writer.write(Long.toString(result.startOffsetNanos()));
         writer.write(',');
         writer.write(Long.toString(result.totalLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.normalizationLatencyNanos()));
+        writer.write(Long.toString(search
+                ? searchMetrics.normalizationLatencyNanos()
+                : updateMetrics.normalizationLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
+        writer.write(Long.toString(search
+                ? searchMetrics.stateRequestLatencyNanos()
+                : updateMetrics.stateRequestLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
+        writer.write(Long.toString(search
+                ? searchMetrics.addressResolutionLatencyNanos()
+                : updateMetrics.addressResolutionLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.oramLockLatencyNanos()));
+        writer.write(Long.toString(search
+                ? searchMetrics.oramReadLatencyNanos()
+                : updateMetrics.oramLockLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.tokenBuildLatencyNanos()));
+        writer.write(Long.toString(search
+                ? searchMetrics.tokenBuildLatencyNanos()
+                : updateMetrics.tokenBuildLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.updateRequestRoundTripLatencyNanos()));
+        writer.write(Long.toString(search
+                ? searchMetrics.searchRequestRoundTripLatencyNanos()
+                : updateMetrics.updateRequestRoundTripLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.oramPublishLatencyNanos()));
+        if (search) {
+            writer.write(Long.toString(searchMetrics.resultProcessingLatencyNanos()));
+        }
+        writer.write(',');
+        if (!search) {
+            writer.write(Long.toString(updateMetrics.oramPublishLatencyNanos()));
+        }
         writer.newLine();
     }
 

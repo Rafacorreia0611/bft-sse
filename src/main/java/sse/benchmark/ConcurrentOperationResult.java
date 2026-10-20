@@ -10,7 +10,6 @@ public final class ConcurrentOperationResult {
     private final long clientOperation;
     private final BenchmarkOperation operation;
     private final String keyword;
-    private final int resultCount;
     private final int updatedDocumentCount;
     private final long startOffsetNanos;
     private final long totalLatencyNanos;
@@ -22,7 +21,6 @@ public final class ConcurrentOperationResult {
                                       long clientOperation,
                                       BenchmarkOperation operation,
                                       String keyword,
-                                      int resultCount,
                                       int updatedDocumentCount,
                                       long startOffsetNanos,
                                       long totalLatencyNanos,
@@ -33,7 +31,6 @@ public final class ConcurrentOperationResult {
         this.clientOperation = clientOperation;
         this.operation = operation;
         this.keyword = keyword;
-        this.resultCount = resultCount;
         this.updatedDocumentCount = updatedDocumentCount;
         this.startOffsetNanos = startOffsetNanos;
         this.totalLatencyNanos = totalLatencyNanos;
@@ -45,7 +42,6 @@ public final class ConcurrentOperationResult {
                                                       int clientId,
                                                       long clientOperation,
                                                       String keyword,
-                                                      int resultCount,
                                                       long startOffsetNanos,
                                                       long totalLatencyNanos,
                                                       SearchOperationMetrics metrics) {
@@ -58,7 +54,6 @@ public final class ConcurrentOperationResult {
                 clientOperation,
                 BenchmarkOperation.SEARCH,
                 keyword,
-                resultCount,
                 0,
                 startOffsetNanos,
                 totalLatencyNanos,
@@ -84,7 +79,6 @@ public final class ConcurrentOperationResult {
                 clientOperation,
                 BenchmarkOperation.UPDATE,
                 keyword,
-                0,
                 updatedDocumentCount,
                 startOffsetNanos,
                 totalLatencyNanos,
@@ -113,12 +107,15 @@ public final class ConcurrentOperationResult {
         return keyword;
     }
 
-    public int resultCount() {
-        return resultCount;
-    }
-
     public int updatedDocumentCount() {
         return updatedDocumentCount;
+    }
+
+    public int observedChainLength() {
+        if (operation == BenchmarkOperation.SEARCH) {
+            return searchMetrics.observedChainLength();
+        }
+        return updateMetrics.observedChainLengthBefore();
     }
 
     public long startOffsetNanos() {

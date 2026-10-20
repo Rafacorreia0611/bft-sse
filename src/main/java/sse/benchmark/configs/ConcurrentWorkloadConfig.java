@@ -1,10 +1,8 @@
 package sse.benchmark.configs;
 
 import java.nio.file.Path;
-import java.util.Locale;
 import java.util.Properties;
 
-import sse.benchmark.BenchmarkOperation;
 import sse.oram.ORAMSettings;
 
 public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
@@ -14,7 +12,7 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
     private final int measurementSeconds;
     private final int warmupKeywordCount;
     private final long seed;
-    private final BenchmarkOperation operation;
+    private final int searchPercentage;
 
     ConcurrentWorkloadConfig(Properties properties, Path configDirectory) {
         super(properties, configDirectory);
@@ -23,7 +21,10 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
         this.measurementSeconds = requirePositiveInt("measurementSeconds");
         this.warmupKeywordCount = requirePositiveInt("warmupKeywordCount");
         this.seed = requireLong("seed");
-        this.operation = parseOperation(requireProperty("operation"));
+        this.searchPercentage = requireNonNegativeInt("searchPercentage");
+        if (searchPercentage > 100) {
+            throw new IllegalArgumentException("Property searchPercentage must be between 0 and 100");
+        }
 
         long highestClientId = (long) clientId() + clientCount - 1L;
         if (highestClientId > Integer.MAX_VALUE - ORAMSettings.DEFAULT_ORAM_CLIENT_ID_OFFSET) {
@@ -51,8 +52,8 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
         return seed;
     }
 
-    public BenchmarkOperation operation() {
-        return operation;
+    public int searchPercentage() {
+        return searchPercentage;
     }
 
     public int clientIdForIndex(int clientIndex) {
@@ -60,13 +61,5 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
             throw new IllegalArgumentException("clientIndex is outside the configured client range");
         }
         return clientId() + clientIndex;
-    }
-
-    private BenchmarkOperation parseOperation(String value) {
-        try {
-            return BenchmarkOperation.valueOf(value.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Property operation must be SEARCH or UPDATE", e);
-        }
     }
 }

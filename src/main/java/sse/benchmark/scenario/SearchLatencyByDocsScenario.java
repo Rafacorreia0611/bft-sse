@@ -33,11 +33,6 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
     }
 
     @Override
-    public BenchmarkOperation operation() {
-        return BenchmarkOperation.SEARCH;
-    }
-
-    @Override
     public void writeHeader(BenchmarkResultWriter resultWriter) throws IOException {
         resultWriter.writeSearchHeader();
     }
@@ -179,7 +174,7 @@ public final class SearchLatencyByDocsScenario implements BenchmarkScenario {
                 validateResults(entry, results);
                 resultWriter.writeSearchSample(
                         name(),
-                        operation(),
+                        BenchmarkOperation.SEARCH,
                         run++,
                         entry.keyword(),
                         activeDocumentCount(entry),

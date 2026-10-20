@@ -40,15 +40,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
     private static final long COORDINATION_TIMEOUT_SECONDS = 300L;
     private static final String WARMUP_DOCUMENT_PREFIX = "cw";
     private static final String MEASUREMENT_DOCUMENT_PREFIX = "cm";
-
-    private final BenchmarkOperation operation;
-
-    public ConcurrentWorkloadScenario(BenchmarkOperation operation) {
-        if (operation == null) {
-            throw new IllegalArgumentException("operation cannot be null");
-        }
-        this.operation = operation;
-    }
+    private static final int DOCUMENTS_PER_UPDATE = 1;
 
     @Override
     public String name() {
@@ -56,17 +48,8 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
     }
 
     @Override
-    public BenchmarkOperation operation() {
-        return operation;
-    }
-
-    @Override
     public void writeHeader(BenchmarkResultWriter resultWriter) throws IOException {
-        if (operation == BenchmarkOperation.SEARCH) {
-            resultWriter.writeConcurrentSearchHeader();
-        } else {
-            resultWriter.writeConcurrentUpdateHeader();
-        }
+        resultWriter.writeConcurrentHeader();
     }
 
     @Override
@@ -75,9 +58,6 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             throw new IllegalArgumentException("Concurrent scenario requires ConcurrentWorkloadConfig");
         }
         ConcurrentWorkloadConfig scenarioConfig = (ConcurrentWorkloadConfig) config;
-        if (scenarioConfig.operation() != operation) {
-            throw new IllegalArgumentException("Scenario operation does not match the concurrent configuration");
-        }
         Path vocabularyPath = Paths.get(scenarioConfig.vocabularyPath());
         validateVocabularyPath(vocabularyPath);
 
@@ -161,14 +141,16 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                     .comparingLong(ConcurrentOperationResult::startOffsetNanos)
                     .thenComparingInt(ConcurrentOperationResult::clientId)
                     .thenComparingLong(ConcurrentOperationResult::clientOperation));
+            int searchCount = 0;
             for (ConcurrentOperationResult result : results) {
-                writeResult(resultWriter, result);
+                resultWriter.writeConcurrentSample(name(), result);
+                if (result.operation() == BenchmarkOperation.SEARCH) {
+                    searchCount++;
+                }
             }
 
             double throughput = results.size() / (double) scenarioConfig.measurementSeconds();
-            String operationName = operation == BenchmarkOperation.SEARCH ? "searches" : "updates";
-            System.out.println("Measured " + results.size() + " completed " + operationName + "; throughput="
-                    + throughput + " ops/s.");
+            printSummary(results.size(), searchCount, throughput, scenarioConfig.searchPercentage());
         } finally {
             warmupStart.countDown();
             measurementStart.countDown();
@@ -204,8 +186,15 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
 
             long warmupOperation = 1L;
             while (firstFailure.get() == null && System.nanoTime() < warmupDeadlineNanos.get()) {
+                BenchmarkOperation selectedOperation = selectOperation(random, config.searchPercentage());
                 KeywordDocIdsEntry entry = randomEntry(warmupEntries, random);
-                runWarmupOperation(clientHandler, entry.keyword(), clientId, warmupOperation++);
+                runWarmupOperation(
+                        selectedOperation,
+                        clientHandler,
+                        entry.keyword(),
+                        clientId,
+                        warmupOperation++
+                );
             }
             warmupFinished.countDown();
             warmupFinishedSignalled = true;
@@ -218,8 +207,10 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                     break;
                 }
 
+                BenchmarkOperation selectedOperation = selectOperation(random, config.searchPercentage());
                 KeywordDocIdsEntry entry = randomEntry(measurementEntries, random);
                 results.add(runMeasuredOperation(
+                        selectedOperation,
                         clientHandler,
                         entry.keyword(),
                         config.clientCount(),
@@ -240,34 +231,35 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         return results;
     }
 
-    private void runWarmupOperation(SSEClientHandler clientHandler,
+    private void runWarmupOperation(BenchmarkOperation selectedOperation,
+                                    SSEClientHandler clientHandler,
                                     String keyword,
                                     int clientId,
                                     long clientOperation) {
-        if (operation == BenchmarkOperation.SEARCH) {
+        if (selectedOperation == BenchmarkOperation.SEARCH) {
             clientHandler.search(keyword);
             return;
         }
-        clientHandler.update(addUpdate(keyword, documentId(WARMUP_DOCUMENT_PREFIX, clientId, clientOperation)));
+        clientHandler.update(addUpdate(keyword, WARMUP_DOCUMENT_PREFIX, clientId, clientOperation));
     }
 
-    private ConcurrentOperationResult runMeasuredOperation(SSEClientHandler clientHandler,
+    private ConcurrentOperationResult runMeasuredOperation(BenchmarkOperation selectedOperation,
+                                                           SSEClientHandler clientHandler,
                                                            String keyword,
                                                            int clientCount,
                                                            int clientId,
                                                            long clientOperation,
                                                            long startOffsetNanos,
                                                            long operationStartNanos) {
-        if (operation == BenchmarkOperation.SEARCH) {
+        if (selectedOperation == BenchmarkOperation.SEARCH) {
             SearchOperationMetrics metrics = new SearchOperationMetrics();
-            List<String> searchResults = clientHandler.search(keyword, metrics);
+            clientHandler.search(keyword, metrics);
             long operationEndNanos = System.nanoTime();
             return ConcurrentOperationResult.forSearch(
                     clientCount,
                     clientId,
                     clientOperation,
                     keyword,
-                    searchResults.size(),
                     startOffsetNanos,
                     operationEndNanos - operationStartNanos,
                     metrics
@@ -276,7 +268,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
 
         UpdateOperationMetrics metrics = new UpdateOperationMetrics();
         clientHandler.update(
-                addUpdate(keyword, documentId(MEASUREMENT_DOCUMENT_PREFIX, clientId, clientOperation)),
+                addUpdate(keyword, MEASUREMENT_DOCUMENT_PREFIX, clientId, clientOperation),
                 metrics
         );
         long operationEndNanos = System.nanoTime();
@@ -285,28 +277,62 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                 clientId,
                 clientOperation,
                 keyword,
-                1,
+                DOCUMENTS_PER_UPDATE,
                 startOffsetNanos,
                 operationEndNanos - operationStartNanos,
                 metrics
         );
     }
 
-    private KeywordUpdate addUpdate(String keyword, String documentId) {
-        return new KeywordUpdate(keyword, Collections.singletonList(documentId), UpdateOp.ADD);
+    private BenchmarkOperation selectOperation(Random random, int searchPercentage) {
+        return random.nextInt(100) < searchPercentage
+                ? BenchmarkOperation.SEARCH
+                : BenchmarkOperation.UPDATE;
     }
 
-    private String documentId(String prefix, int clientId, long clientOperation) {
-        return prefix + '-' + clientId + '-' + clientOperation;
+    private KeywordUpdate addUpdate(String keyword,
+                                    String documentPrefix,
+                                    int clientId,
+                                    long clientOperation) {
+        return new KeywordUpdate(
+                keyword,
+                documentIds(documentPrefix, clientId, clientOperation),
+                UpdateOp.ADD
+        );
     }
 
-    private void writeResult(BenchmarkResultWriter resultWriter, ConcurrentOperationResult result)
-            throws IOException {
-        if (result.operation() == BenchmarkOperation.SEARCH) {
-            resultWriter.writeConcurrentSearchSample(name(), result.operation(), result);
-        } else {
-            resultWriter.writeConcurrentUpdateSample(name(), result.operation(), result);
+    private List<String> documentIds(String prefix, int clientId, long clientOperation) {
+        String baseId = prefix + '-' + clientId + '-' + clientOperation;
+        if (DOCUMENTS_PER_UPDATE == 1) {
+            return Collections.singletonList(baseId);
         }
+
+        List<String> documentIds = new ArrayList<String>(DOCUMENTS_PER_UPDATE);
+        for (int documentIndex = 1; documentIndex <= DOCUMENTS_PER_UPDATE; documentIndex++) {
+            documentIds.add(baseId + '-' + documentIndex);
+        }
+        return documentIds;
+    }
+
+    private void printSummary(int operationCount,
+                              int searchCount,
+                              double throughput,
+                              int searchPercentage) {
+        if (searchPercentage == 100) {
+            System.out.println("Measured " + operationCount + " completed searches; throughput="
+                    + throughput + " ops/s.");
+            return;
+        }
+        if (searchPercentage == 0) {
+            System.out.println("Measured " + operationCount + " completed updates; throughput="
+                    + throughput + " ops/s.");
+            return;
+        }
+
+        int updateCount = operationCount - searchCount;
+        System.out.println("Measured " + operationCount + " completed operations ("
+                + searchCount + " searches, " + updateCount + " updates); throughput="
+                + throughput + " ops/s.");
     }
 
     private KeywordDocIdsEntry randomEntry(List<KeywordDocIdsEntry> entries, Random random) {

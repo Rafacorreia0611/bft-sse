@@ -32,11 +32,6 @@ public final class UpdateLatencyByDocsScenario implements BenchmarkScenario {
     }
 
     @Override
-    public BenchmarkOperation operation() {
-        return BenchmarkOperation.UPDATE;
-    }
-
-    @Override
     public void writeHeader(BenchmarkResultWriter resultWriter) throws IOException {
         resultWriter.writeUpdateHeader();
     }
@@ -160,7 +155,7 @@ public final class UpdateLatencyByDocsScenario implements BenchmarkScenario {
 
             resultWriter.writeUpdateSample(
                     name(),
-                    operation(),
+                    BenchmarkOperation.UPDATE,
                     i + 1,
                     entry.keyword(),
                     entry.docIds().size(),
