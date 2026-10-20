@@ -1,8 +1,10 @@
 package sse.benchmark;
 
 import sse.benchmark.configs.BenchmarkConfig;
+import sse.benchmark.configs.ConcurrentWorkloadConfig;
 import sse.benchmark.configs.SearchLatencyByDocsConfig;
 import sse.benchmark.configs.UpdateLatencyByDocsConfig;
+import sse.benchmark.scenario.ConcurrentWorkloadScenario;
 import sse.benchmark.scenario.SearchLatencyByDocsScenario;
 import sse.benchmark.scenario.UpdateLatencyByDocsScenario;
 
@@ -32,6 +34,9 @@ public final class BenchmarkClient {
         }
         if (config instanceof UpdateLatencyByDocsConfig) {
             return new UpdateLatencyByDocsScenario();
+        }
+        if (config instanceof ConcurrentWorkloadConfig) {
+            return new ConcurrentWorkloadScenario();
         }
 
         throw new IllegalArgumentException("Unsupported benchmark config: " + config.getClass().getName());

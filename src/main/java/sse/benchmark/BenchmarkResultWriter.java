@@ -86,6 +86,55 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.newLine();
     }
 
+    public void writeConcurrentSearchHeader() throws IOException {
+        writer.write("scenario,operation,client_count,client_id,client_operation,keyword,result_count,"
+                + "chain_length,start_offset_ns,total_latency_ns,normalization_latency_ns,"
+                + "state_request_latency_ns,address_resolution_latency_ns,oram_read_latency_ns,"
+                + "token_build_latency_ns,search_request_round_trip_latency_ns,"
+                + "result_processing_latency_ns");
+        writer.newLine();
+    }
+
+    public void writeConcurrentSearchSample(String scenarioName,
+                                            BenchmarkOperation operation,
+                                            ConcurrentOperationResult result) throws IOException {
+        SearchOperationMetrics metrics = result.metrics();
+        writer.write(csvValue(scenarioName));
+        writer.write(',');
+        writer.write(csvValue(operation.name()));
+        writer.write(',');
+        writer.write(Integer.toString(result.clientCount()));
+        writer.write(',');
+        writer.write(Integer.toString(result.clientId()));
+        writer.write(',');
+        writer.write(Long.toString(result.clientOperation()));
+        writer.write(',');
+        writer.write(csvValue(result.keyword()));
+        writer.write(',');
+        writer.write(Integer.toString(result.resultCount()));
+        writer.write(',');
+        writer.write(Integer.toString(metrics.observedChainLength()));
+        writer.write(',');
+        writer.write(Long.toString(result.startOffsetNanos()));
+        writer.write(',');
+        writer.write(Long.toString(result.totalLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.normalizationLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.oramReadLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.tokenBuildLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.searchRequestRoundTripLatencyNanos()));
+        writer.write(',');
+        writer.write(Long.toString(metrics.resultProcessingLatencyNanos()));
+        writer.newLine();
+    }
+
     public void writeUpdateSample(String scenarioName,
                                   BenchmarkOperation operation,
                                   int run,

@@ -72,13 +72,17 @@ public abstract class BenchmarkConfig {
     }
 
     protected final long requirePositiveLong(String key) {
+        long parsed = requireLong(key);
+        if (parsed <= 0L) {
+            throw new IllegalArgumentException("Property " + key + " must be greater than 0");
+        }
+        return parsed;
+    }
+
+    protected final long requireLong(String key) {
         String value = requireProperty(key);
         try {
-            long parsed = Long.parseLong(value);
-            if (parsed <= 0L) {
-                throw new IllegalArgumentException("Property " + key + " must be greater than 0");
-            }
-            return parsed;
+            return Long.parseLong(value);
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("Property " + key + " must be a valid long", e);
         }
@@ -95,6 +99,9 @@ public abstract class BenchmarkConfig {
         }
         if ("update-latency-by-docs".equals(scenarioName)) {
             return new UpdateLatencyByDocsConfig(properties, configDirectory);
+        }
+        if ("concurrent-workload".equals(scenarioName)) {
+            return new ConcurrentWorkloadConfig(properties, configDirectory);
         }
         throw new IllegalArgumentException("Unknown benchmark scenario: " + scenarioName);
     }

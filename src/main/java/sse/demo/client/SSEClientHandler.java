@@ -103,6 +103,8 @@ public final class SSEClientHandler {
         KeywordBlock keywordBlock = oramAdapter.readKeywordBlock(keywordLocation);
         if (metrics != null) {
             metrics.recordOramReadLatency(System.nanoTime() - phaseStart);
+            metrics.recordObservedChainLength(
+                    keywordBlock.keywordState() == null ? 0 : keywordBlock.keywordState().counter());
         }
 
         phaseStart = startTiming(metrics);

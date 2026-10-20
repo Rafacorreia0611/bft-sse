@@ -15,6 +15,7 @@ public final class SearchOperationMetrics {
     private long tokenBuildLatencyNanos;
     private long searchRequestRoundTripLatencyNanos;
     private long resultProcessingLatencyNanos;
+    private int observedChainLength;
 
     public long normalizationLatencyNanos() {
         return normalizationLatencyNanos;
@@ -74,5 +75,13 @@ public final class SearchOperationMetrics {
 
     public void recordResultProcessingLatency(long latencyNanos) {
         resultProcessingLatencyNanos = latencyNanos;
+    }
+
+    public int observedChainLength() {
+        return observedChainLength;
+    }
+
+    public void recordObservedChainLength(int chainLength) {
+        observedChainLength = chainLength;
     }
 }
