@@ -15,6 +15,7 @@ public final class UpdateOperationMetrics {
     private long tokenBuildLatencyNanos;
     private long updateRequestRoundTripLatencyNanos;
     private long oramPublishLatencyNanos;
+    private int observedChainLengthBefore;
 
     public long normalizationLatencyNanos() {
         return normalizationLatencyNanos;
@@ -83,5 +84,13 @@ public final class UpdateOperationMetrics {
 
     public void recordOramPublishLatency(long latencyNanos) {
         oramPublishLatencyNanos = latencyNanos;
+    }
+
+    public int observedChainLengthBefore() {
+        return observedChainLengthBefore;
+    }
+
+    public void recordObservedChainLengthBefore(int chainLength) {
+        observedChainLengthBefore = chainLength;
     }
 }

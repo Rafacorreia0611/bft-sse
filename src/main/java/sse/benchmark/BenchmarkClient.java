@@ -36,7 +36,8 @@ public final class BenchmarkClient {
             return new UpdateLatencyByDocsScenario();
         }
         if (config instanceof ConcurrentWorkloadConfig) {
-            return new ConcurrentWorkloadScenario();
+            ConcurrentWorkloadConfig concurrentConfig = (ConcurrentWorkloadConfig) config;
+            return new ConcurrentWorkloadScenario(concurrentConfig.operation());
         }
 
         throw new IllegalArgumentException("Unsupported benchmark config: " + config.getClass().getName());

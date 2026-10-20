@@ -196,6 +196,8 @@ public final class SSEClientHandler {
         }
         if (metrics != null) {
             metrics.recordOramLockLatency(System.nanoTime() - phaseStart);
+            metrics.recordObservedChainLengthBefore(
+                    oldBlock.keywordState() == null ? 0 : oldBlock.keywordState().counter());
         }
 
         boolean updateCommitted = false;

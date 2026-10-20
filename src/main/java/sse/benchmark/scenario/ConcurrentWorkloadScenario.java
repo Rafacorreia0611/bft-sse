@@ -29,12 +29,26 @@ import sse.dataset.KeywordDocIdsEntry;
 import sse.dataset.KeywordDocIdsReader;
 import sse.demo.client.ConfidentialClientAdapter;
 import sse.demo.client.SSEClientHandler;
+import sse.domain.update.KeywordUpdate;
+import sse.domain.update.UpdateOp;
 import sse.metrics.SearchOperationMetrics;
+import sse.metrics.UpdateOperationMetrics;
 import vss.facade.SecretSharingException;
 
 public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
 
     private static final long COORDINATION_TIMEOUT_SECONDS = 300L;
+    private static final String WARMUP_DOCUMENT_PREFIX = "cw";
+    private static final String MEASUREMENT_DOCUMENT_PREFIX = "cm";
+
+    private final BenchmarkOperation operation;
+
+    public ConcurrentWorkloadScenario(BenchmarkOperation operation) {
+        if (operation == null) {
+            throw new IllegalArgumentException("operation cannot be null");
+        }
+        this.operation = operation;
+    }
 
     @Override
     public String name() {
@@ -43,12 +57,16 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
 
     @Override
     public BenchmarkOperation operation() {
-        return BenchmarkOperation.SEARCH;
+        return operation;
     }
 
     @Override
     public void writeHeader(BenchmarkResultWriter resultWriter) throws IOException {
-        resultWriter.writeConcurrentSearchHeader();
+        if (operation == BenchmarkOperation.SEARCH) {
+            resultWriter.writeConcurrentSearchHeader();
+        } else {
+            resultWriter.writeConcurrentUpdateHeader();
+        }
     }
 
     @Override
@@ -57,6 +75,9 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             throw new IllegalArgumentException("Concurrent scenario requires ConcurrentWorkloadConfig");
         }
         ConcurrentWorkloadConfig scenarioConfig = (ConcurrentWorkloadConfig) config;
+        if (scenarioConfig.operation() != operation) {
+            throw new IllegalArgumentException("Scenario operation does not match the concurrent configuration");
+        }
         Path vocabularyPath = Paths.get(scenarioConfig.vocabularyPath());
         validateVocabularyPath(vocabularyPath);
 
@@ -141,11 +162,12 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                     .thenComparingInt(ConcurrentOperationResult::clientId)
                     .thenComparingLong(ConcurrentOperationResult::clientOperation));
             for (ConcurrentOperationResult result : results) {
-                resultWriter.writeConcurrentSearchSample(name(), operation(), result);
+                writeResult(resultWriter, result);
             }
 
             double throughput = results.size() / (double) scenarioConfig.measurementSeconds();
-            System.out.println("Measured " + results.size() + " completed searches; throughput="
+            String operationName = operation == BenchmarkOperation.SEARCH ? "searches" : "updates";
+            System.out.println("Measured " + results.size() + " completed " + operationName + "; throughput="
                     + throughput + " ops/s.");
         } finally {
             warmupStart.countDown();
@@ -173,15 +195,17 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             AtomicReference<Throwable> firstFailure) {
         List<ConcurrentOperationResult> results = new ArrayList<ConcurrentOperationResult>();
         Random random = new Random(config.seed() + clientIndex);
+        int clientId = config.clientIdForIndex(clientIndex);
         boolean warmupFinishedSignalled = false;
 
         try {
             workersReady.countDown();
             warmupStart.await();
 
+            long warmupOperation = 1L;
             while (firstFailure.get() == null && System.nanoTime() < warmupDeadlineNanos.get()) {
                 KeywordDocIdsEntry entry = randomEntry(warmupEntries, random);
-                clientHandler.search(entry.keyword());
+                runWarmupOperation(clientHandler, entry.keyword(), clientId, warmupOperation++);
             }
             warmupFinished.countDown();
             warmupFinishedSignalled = true;
@@ -195,20 +219,16 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                 }
 
                 KeywordDocIdsEntry entry = randomEntry(measurementEntries, random);
-                SearchOperationMetrics metrics = new SearchOperationMetrics();
-                List<String> searchResults = clientHandler.search(entry.keyword(), metrics);
-                long operationEnd = System.nanoTime();
-
-                results.add(new ConcurrentOperationResult(
-                        config.clientCount(),
-                        config.clientIdForIndex(clientIndex),
-                        clientOperation++,
+                results.add(runMeasuredOperation(
+                        clientHandler,
                         entry.keyword(),
-                        searchResults.size(),
+                        config.clientCount(),
+                        clientId,
+                        clientOperation,
                         operationStart - measurementStartNanos.get(),
-                        operationEnd - operationStart,
-                        metrics
+                        operationStart
                 ));
+                clientOperation++;
             }
         } catch (Throwable failure) {
             firstFailure.compareAndSet(null, failure);
@@ -218,6 +238,75 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             }
         }
         return results;
+    }
+
+    private void runWarmupOperation(SSEClientHandler clientHandler,
+                                    String keyword,
+                                    int clientId,
+                                    long clientOperation) {
+        if (operation == BenchmarkOperation.SEARCH) {
+            clientHandler.search(keyword);
+            return;
+        }
+        clientHandler.update(addUpdate(keyword, documentId(WARMUP_DOCUMENT_PREFIX, clientId, clientOperation)));
+    }
+
+    private ConcurrentOperationResult runMeasuredOperation(SSEClientHandler clientHandler,
+                                                           String keyword,
+                                                           int clientCount,
+                                                           int clientId,
+                                                           long clientOperation,
+                                                           long startOffsetNanos,
+                                                           long operationStartNanos) {
+        if (operation == BenchmarkOperation.SEARCH) {
+            SearchOperationMetrics metrics = new SearchOperationMetrics();
+            List<String> searchResults = clientHandler.search(keyword, metrics);
+            long operationEndNanos = System.nanoTime();
+            return ConcurrentOperationResult.forSearch(
+                    clientCount,
+                    clientId,
+                    clientOperation,
+                    keyword,
+                    searchResults.size(),
+                    startOffsetNanos,
+                    operationEndNanos - operationStartNanos,
+                    metrics
+            );
+        }
+
+        UpdateOperationMetrics metrics = new UpdateOperationMetrics();
+        clientHandler.update(
+                addUpdate(keyword, documentId(MEASUREMENT_DOCUMENT_PREFIX, clientId, clientOperation)),
+                metrics
+        );
+        long operationEndNanos = System.nanoTime();
+        return ConcurrentOperationResult.forUpdate(
+                clientCount,
+                clientId,
+                clientOperation,
+                keyword,
+                1,
+                startOffsetNanos,
+                operationEndNanos - operationStartNanos,
+                metrics
+        );
+    }
+
+    private KeywordUpdate addUpdate(String keyword, String documentId) {
+        return new KeywordUpdate(keyword, Collections.singletonList(documentId), UpdateOp.ADD);
+    }
+
+    private String documentId(String prefix, int clientId, long clientOperation) {
+        return prefix + '-' + clientId + '-' + clientOperation;
+    }
+
+    private void writeResult(BenchmarkResultWriter resultWriter, ConcurrentOperationResult result)
+            throws IOException {
+        if (result.operation() == BenchmarkOperation.SEARCH) {
+            resultWriter.writeConcurrentSearchSample(name(), result.operation(), result);
+        } else {
+            resultWriter.writeConcurrentUpdateSample(name(), result.operation(), result);
+        }
     }
 
     private KeywordDocIdsEntry randomEntry(List<KeywordDocIdsEntry> entries, Random random) {
