@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -23,6 +24,7 @@ import sse.benchmark.BenchmarkOperation;
 import sse.benchmark.BenchmarkResultWriter;
 import sse.benchmark.BenchmarkScenario;
 import sse.benchmark.ConcurrentOperationResult;
+import sse.benchmark.KeywordSelectionDistribution;
 import sse.benchmark.configs.BenchmarkConfig;
 import sse.benchmark.configs.ConcurrentWorkloadConfig;
 import sse.dataset.KeywordDocIdsEntry;
@@ -66,6 +68,8 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         List<KeywordDocIdsEntry> warmupEntries = entries.subList(0, scenarioConfig.warmupKeywordCount());
         List<KeywordDocIdsEntry> measurementEntries =
                 entries.subList(scenarioConfig.warmupKeywordCount(), entries.size());
+        double[] warmupSelectionCdf = buildSelectionCdf(warmupEntries.size(), scenarioConfig);
+        double[] measurementSelectionCdf = buildSelectionCdf(measurementEntries.size(), scenarioConfig);
 
         List<ConfidentialClientAdapter> adapters = new ArrayList<ConfidentialClientAdapter>();
         List<SSEClientHandler> clientHandlers = new ArrayList<SSEClientHandler>();
@@ -95,6 +99,8 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                         scenarioConfig,
                         warmupEntries,
                         measurementEntries,
+                        warmupSelectionCdf,
+                        measurementSelectionCdf,
                         workersReady,
                         warmupStart,
                         warmupFinished,
@@ -167,6 +173,8 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             ConcurrentWorkloadConfig config,
             List<KeywordDocIdsEntry> warmupEntries,
             List<KeywordDocIdsEntry> measurementEntries,
+            double[] warmupSelectionCdf,
+            double[] measurementSelectionCdf,
             CountDownLatch workersReady,
             CountDownLatch warmupStart,
             CountDownLatch warmupFinished,
@@ -187,7 +195,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             long warmupOperation = 1L;
             while (firstFailure.get() == null && System.nanoTime() < warmupDeadlineNanos.get()) {
                 BenchmarkOperation selectedOperation = selectOperation(random, config.searchPercentage());
-                KeywordDocIdsEntry entry = randomEntry(warmupEntries, random);
+                KeywordDocIdsEntry entry = selectEntry(warmupEntries, warmupSelectionCdf, random);
                 runWarmupOperation(
                         selectedOperation,
                         clientHandler,
@@ -208,7 +216,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                 }
 
                 BenchmarkOperation selectedOperation = selectOperation(random, config.searchPercentage());
-                KeywordDocIdsEntry entry = randomEntry(measurementEntries, random);
+                KeywordDocIdsEntry entry = selectEntry(measurementEntries, measurementSelectionCdf, random);
                 results.add(runMeasuredOperation(
                         selectedOperation,
                         clientHandler,
@@ -335,8 +343,40 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                 + throughput + " ops/s.");
     }
 
-    private KeywordDocIdsEntry randomEntry(List<KeywordDocIdsEntry> entries, Random random) {
-        return entries.get(random.nextInt(entries.size()));
+    private double[] buildSelectionCdf(int keywordCount, ConcurrentWorkloadConfig config) {
+        if (config.keywordSelectionDistribution() != KeywordSelectionDistribution.ZIPFIAN) {
+            return null;
+        }
+
+        double[] cumulativeProbabilities = new double[keywordCount];
+        double totalWeight = 0.0;
+        for (int index = 0; index < keywordCount; index++) {
+            double weight = 1.0 / Math.pow(index + 1, config.zipfianExponent());
+            cumulativeProbabilities[index] = weight;
+            totalWeight += weight;
+        }
+
+        double cumulativeProbability = 0.0;
+        for (int index = 0; index < keywordCount; index++) {
+            cumulativeProbability += cumulativeProbabilities[index] / totalWeight;
+            cumulativeProbabilities[index] = cumulativeProbability;
+        }
+        cumulativeProbabilities[keywordCount - 1] = 1.0;
+        return cumulativeProbabilities;
+    }
+
+    private KeywordDocIdsEntry selectEntry(List<KeywordDocIdsEntry> entries,
+                                            double[] selectionCdf,
+                                            Random random) {
+        if (selectionCdf == null) {
+            return entries.get(random.nextInt(entries.size()));
+        }
+
+        int index = Arrays.binarySearch(selectionCdf, random.nextDouble());
+        if (index < 0) {
+            index = -index - 1;
+        }
+        return entries.get(index);
     }
 
     private void awaitLatch(CountDownLatch latch, long timeoutSeconds, String description)
