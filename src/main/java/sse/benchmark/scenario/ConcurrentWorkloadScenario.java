@@ -25,6 +25,7 @@ import sse.benchmark.BenchmarkResultWriter;
 import sse.benchmark.BenchmarkScenario;
 import sse.benchmark.ConcurrentOperationResult;
 import sse.benchmark.KeywordSelectionDistribution;
+import sse.benchmark.LockContentionLevel;
 import sse.benchmark.configs.BenchmarkConfig;
 import sse.benchmark.configs.ConcurrentWorkloadConfig;
 import sse.dataset.KeywordDocIdsEntry;
@@ -44,9 +45,19 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
     private static final String MEASUREMENT_DOCUMENT_PREFIX = "cm";
     private static final int DOCUMENTS_PER_UPDATE = 1;
 
+    private final String scenarioName;
+
+    public ConcurrentWorkloadScenario(String scenarioName) {
+        if (!"concurrent-workload".equals(scenarioName)
+                && !"lock-contention".equals(scenarioName)) {
+            throw new IllegalArgumentException("Unsupported concurrent scenario: " + scenarioName);
+        }
+        this.scenarioName = scenarioName;
+    }
+
     @Override
     public String name() {
-        return "concurrent-workload";
+        return scenarioName;
     }
 
     @Override
@@ -68,6 +79,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         List<KeywordDocIdsEntry> warmupEntries = entries.subList(0, scenarioConfig.warmupKeywordCount());
         List<KeywordDocIdsEntry> measurementEntries =
                 entries.subList(scenarioConfig.warmupKeywordCount(), entries.size());
+        validateContentionKeywordPools(warmupEntries, measurementEntries, scenarioConfig);
         double[] warmupSelectionCdf = buildSelectionCdf(warmupEntries.size(), scenarioConfig);
         double[] measurementSelectionCdf = buildSelectionCdf(measurementEntries.size(), scenarioConfig);
 
@@ -194,8 +206,15 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
 
             long warmupOperation = 1L;
             while (firstFailure.get() == null && System.nanoTime() < warmupDeadlineNanos.get()) {
-                BenchmarkOperation selectedOperation = selectOperation(random, config.searchPercentage());
-                KeywordDocIdsEntry entry = selectEntry(warmupEntries, warmupSelectionCdf, random);
+                BenchmarkOperation selectedOperation;
+                KeywordDocIdsEntry entry;
+                if (config.isLockContentionScenario()) {
+                    selectedOperation = BenchmarkOperation.UPDATE;
+                    entry = selectContentionEntry(warmupEntries, random, clientIndex, config);
+                } else {
+                    selectedOperation = selectOperation(random, config.searchPercentage());
+                    entry = selectWorkloadEntry(warmupEntries, warmupSelectionCdf, random);
+                }
                 runWarmupOperation(
                         selectedOperation,
                         clientHandler,
@@ -215,8 +234,15 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                     break;
                 }
 
-                BenchmarkOperation selectedOperation = selectOperation(random, config.searchPercentage());
-                KeywordDocIdsEntry entry = selectEntry(measurementEntries, measurementSelectionCdf, random);
+                BenchmarkOperation selectedOperation;
+                KeywordDocIdsEntry entry;
+                if (config.isLockContentionScenario()) {
+                    selectedOperation = BenchmarkOperation.UPDATE;
+                    entry = selectContentionEntry(measurementEntries, random, clientIndex, config);
+                } else {
+                    selectedOperation = selectOperation(random, config.searchPercentage());
+                    entry = selectWorkloadEntry(measurementEntries, measurementSelectionCdf, random);
+                }
                 results.add(runMeasuredOperation(
                         selectedOperation,
                         clientHandler,
@@ -365,9 +391,9 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         return cumulativeProbabilities;
     }
 
-    private KeywordDocIdsEntry selectEntry(List<KeywordDocIdsEntry> entries,
-                                            double[] selectionCdf,
-                                            Random random) {
+    private KeywordDocIdsEntry selectWorkloadEntry(List<KeywordDocIdsEntry> entries,
+                                                    double[] selectionCdf,
+                                                    Random random) {
         if (selectionCdf == null) {
             return entries.get(random.nextInt(entries.size()));
         }
@@ -377,6 +403,24 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             index = -index - 1;
         }
         return entries.get(index);
+    }
+
+    private KeywordDocIdsEntry selectContentionEntry(List<KeywordDocIdsEntry> entries,
+                                                      Random random,
+                                                      int clientIndex,
+                                                      ConcurrentWorkloadConfig config) {
+        switch (config.lockContentionLevel()) {
+            case NONE:
+                return entries.get(clientIndex);
+            case MODERATE:
+                return entries.get(random.nextInt(config.sharedKeywordCount()));
+            case HIGH:
+                return entries.get(0);
+            default:
+                throw new IllegalStateException(
+                        "Unsupported contention level: " + config.lockContentionLevel()
+                );
+        }
     }
 
     private void awaitLatch(CountDownLatch latch, long timeoutSeconds, String description)
@@ -464,6 +508,39 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             throw new IllegalArgumentException("Benchmark input requires more than " + warmupKeywordCount
                     + " entries: the first entries are reserved for warm-up and at least one is needed for "
                     + "measurement");
+        }
+    }
+
+    private void validateContentionKeywordPools(List<KeywordDocIdsEntry> warmupEntries,
+                                                List<KeywordDocIdsEntry> measurementEntries,
+                                                ConcurrentWorkloadConfig config) {
+        if (!config.isLockContentionScenario()) {
+            return;
+        }
+
+        int requiredKeywordCount;
+        LockContentionLevel level = config.lockContentionLevel();
+        switch (level) {
+            case NONE:
+                requiredKeywordCount = config.clientCount();
+                break;
+            case MODERATE:
+                requiredKeywordCount = config.sharedKeywordCount();
+                break;
+            case HIGH:
+                requiredKeywordCount = 1;
+                break;
+            default:
+                throw new IllegalStateException("Unsupported contention level: " + level);
+        }
+
+        if (warmupEntries.size() < requiredKeywordCount) {
+            throw new IllegalArgumentException(level + " contention requires at least "
+                    + requiredKeywordCount + " warm-up keywords");
+        }
+        if (measurementEntries.size() < requiredKeywordCount) {
+            throw new IllegalArgumentException(level + " contention requires at least "
+                    + requiredKeywordCount + " measurement keywords");
         }
     }
 }

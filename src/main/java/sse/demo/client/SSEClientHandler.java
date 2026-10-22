@@ -187,15 +187,18 @@ public final class SSEClientHandler {
 
         phaseStart = startTiming(metrics);
         KeywordBlock oldBlock;
+        int lockRetryCount = 0;
         while (true) {
             oldBlock = oramAdapter.acquireKeywordLock(keywordLocation);
             if (!oldBlock.locked()) {
                 break;
             }
+            lockRetryCount++;
             sleepBeforeLockRetry();
         }
         if (metrics != null) {
             metrics.recordOramLockLatency(System.nanoTime() - phaseStart);
+            metrics.recordOramLockRetryCount(lockRetryCount);
             metrics.recordObservedChainLengthBefore(
                     oldBlock.keywordState() == null ? 0 : oldBlock.keywordState().counter());
         }

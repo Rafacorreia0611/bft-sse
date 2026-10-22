@@ -90,7 +90,8 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write("scenario,operation,client_count,client_id,client_operation,keyword,"
                 + "updated_document_count,observed_chain_length,start_offset_ns,total_latency_ns,"
                 + "normalization_latency_ns,state_request_latency_ns,address_resolution_latency_ns,"
-                + "oram_access_latency_ns,token_build_latency_ns,request_round_trip_latency_ns,"
+                + "oram_access_latency_ns,oram_lock_retry_count,token_build_latency_ns,"
+                + "request_round_trip_latency_ns,"
                 + "result_processing_latency_ns,oram_publish_latency_ns");
         writer.newLine();
     }
@@ -138,6 +139,10 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(Long.toString(search
                 ? searchMetrics.oramReadLatencyNanos()
                 : updateMetrics.oramLockLatencyNanos()));
+        writer.write(',');
+        if (!search) {
+            writer.write(Integer.toString(updateMetrics.oramLockRetryCount()));
+        }
         writer.write(',');
         writer.write(Long.toString(search
                 ? searchMetrics.tokenBuildLatencyNanos()

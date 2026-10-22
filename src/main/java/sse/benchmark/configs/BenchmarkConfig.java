@@ -100,7 +100,8 @@ public abstract class BenchmarkConfig {
         if ("update-latency-by-docs".equals(scenarioName)) {
             return new UpdateLatencyByDocsConfig(properties, configDirectory);
         }
-        if ("concurrent-workload".equals(scenarioName)) {
+        if ("concurrent-workload".equals(scenarioName)
+                || "lock-contention".equals(scenarioName)) {
             return new ConcurrentWorkloadConfig(properties, configDirectory);
         }
         throw new IllegalArgumentException("Unknown benchmark scenario: " + scenarioName);

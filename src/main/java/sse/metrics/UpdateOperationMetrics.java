@@ -12,6 +12,7 @@ public final class UpdateOperationMetrics {
     private long stateRequestLatencyNanos;
     private long addressResolutionLatencyNanos;
     private long oramLockLatencyNanos;
+    private int oramLockRetryCount;
     private long tokenBuildLatencyNanos;
     private long updateRequestRoundTripLatencyNanos;
     private long oramPublishLatencyNanos;
@@ -51,6 +52,17 @@ public final class UpdateOperationMetrics {
 
     public void recordOramLockLatency(long latencyNanos) {
         oramLockLatencyNanos = latencyNanos;
+    }
+
+    public int oramLockRetryCount() {
+        return oramLockRetryCount;
+    }
+
+    public void recordOramLockRetryCount(int retryCount) {
+        if (retryCount < 0) {
+            throw new IllegalArgumentException("ORAM lock retry count cannot be negative");
+        }
+        oramLockRetryCount = retryCount;
     }
 
     public long tokenBuildLatencyNanos() {

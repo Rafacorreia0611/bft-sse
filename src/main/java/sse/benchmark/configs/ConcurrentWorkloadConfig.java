@@ -4,6 +4,7 @@ import java.nio.file.Path;
 import java.util.Properties;
 
 import sse.benchmark.KeywordSelectionDistribution;
+import sse.benchmark.LockContentionLevel;
 import sse.oram.ORAMSettings;
 
 public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
@@ -16,6 +17,8 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
     private final int searchPercentage;
     private final KeywordSelectionDistribution keywordSelectionDistribution;
     private final double zipfianExponent;
+    private final LockContentionLevel lockContentionLevel;
+    private final int sharedKeywordCount;
 
     ConcurrentWorkloadConfig(Properties properties, Path configDirectory) {
         super(properties, configDirectory);
@@ -24,18 +27,28 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
         this.measurementSeconds = requirePositiveInt("measurementSeconds");
         this.warmupKeywordCount = requirePositiveInt("warmupKeywordCount");
         this.seed = requireLong("seed");
-        this.searchPercentage = requireNonNegativeInt("searchPercentage");
-        if (searchPercentage > 100) {
-            throw new IllegalArgumentException("Property searchPercentage must be between 0 and 100");
-        }
 
-        this.keywordSelectionDistribution = parseKeywordSelectionDistribution(
-                requireProperty("keywordSelectionDistribution")
-        );
-        if (keywordSelectionDistribution == KeywordSelectionDistribution.ZIPFIAN) {
-            this.zipfianExponent = requirePositiveDouble("zipfianExponent");
-        } else {
+        if (isLockContentionScenario()) {
+            this.searchPercentage = 0;
+            this.keywordSelectionDistribution = KeywordSelectionDistribution.UNIFORM;
             this.zipfianExponent = 0.0;
+            this.lockContentionLevel = parseLockContentionLevel(requireProperty("contentionLevel"));
+            this.sharedKeywordCount = lockContentionLevel == LockContentionLevel.MODERATE
+                    ? requirePositiveInt("sharedKeywordCount")
+                    : lockContentionLevel == LockContentionLevel.HIGH ? 1 : 0;
+        } else {
+            this.searchPercentage = requireNonNegativeInt("searchPercentage");
+            if (searchPercentage > 100) {
+                throw new IllegalArgumentException("Property searchPercentage must be between 0 and 100");
+            }
+            this.keywordSelectionDistribution = parseKeywordSelectionDistribution(
+                    requireProperty("keywordSelectionDistribution")
+            );
+            this.zipfianExponent = keywordSelectionDistribution == KeywordSelectionDistribution.ZIPFIAN
+                    ? requirePositiveDouble("zipfianExponent")
+                    : 0.0;
+            this.lockContentionLevel = LockContentionLevel.NONE;
+            this.sharedKeywordCount = 0;
         }
 
         long highestClientId = (long) clientId() + clientCount - 1L;
@@ -76,6 +89,18 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
         return zipfianExponent;
     }
 
+    public boolean isLockContentionScenario() {
+        return "lock-contention".equals(scenarioName());
+    }
+
+    public LockContentionLevel lockContentionLevel() {
+        return lockContentionLevel;
+    }
+
+    public int sharedKeywordCount() {
+        return sharedKeywordCount;
+    }
+
     public int clientIdForIndex(int clientIndex) {
         if (clientIndex < 0 || clientIndex >= clientCount) {
             throw new IllegalArgumentException("clientIndex is outside the configured client range");
@@ -104,6 +129,17 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
         }
         throw new IllegalArgumentException(
                 "Property keywordSelectionDistribution must be uniform or zipfian"
+        );
+    }
+
+    private LockContentionLevel parseLockContentionLevel(String value) {
+        for (LockContentionLevel level : LockContentionLevel.values()) {
+            if (level.name().equalsIgnoreCase(value)) {
+                return level;
+            }
+        }
+        throw new IllegalArgumentException(
+                "Property contentionLevel must be none, moderate or high"
         );
     }
 }
