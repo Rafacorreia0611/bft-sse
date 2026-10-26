@@ -97,7 +97,8 @@ load_config() {
   SYNTHETIC_OUTPUT_PATH="$(get_property syntheticOutputPath)"
   SYNTHETIC_KEYWORD_COUNT="$(get_property syntheticKeywordCount)"
   SYNTHETIC_DOCUMENTS_PER_KEYWORD="$(get_property syntheticDocumentsPerKeyword)"
-  CONFIGURED_SEED="$(get_property seed)"
+  CONFIGURED_DATASET_SEED="$(get_property datasetSeed)"
+  CONFIGURED_WORKLOAD_SEED="$(get_property workloadSeed)"
 
   REPLICA_COUNT="$(get_property sseReplicas)"
   ORAM_REPLICA_COUNT="$(get_property oramReplicas)"
@@ -113,10 +114,15 @@ load_config() {
 
   TIMESTAMP_OUTPUTS="$(get_property timestampOutputs)"
   OUTPUT_PATH="$(get_property outputPath)"
+  LOG_OUTPUT_DIRECTORY="$(sed -n 's/^logOutputDirectory=//p' "$CONFIG_PATH" | tail -n 1)"
 
   ABS_VOCABULARY_PATH="$(resolve_config_path "$VOCABULARY_PATH")"
   ABS_SYNTHETIC_OUTPUT_PATH="$(resolve_config_path "$SYNTHETIC_OUTPUT_PATH")"
   BASE_OUTPUT_PATH="$(resolve_config_path "$OUTPUT_PATH")"
+  ABS_LOG_OUTPUT_DIRECTORY=""
+  if [[ -n "$LOG_OUTPUT_DIRECTORY" ]]; then
+    ABS_LOG_OUTPUT_DIRECTORY="$(resolve_config_path "$LOG_OUTPUT_DIRECTORY")"
+  fi
 
   load_scenario_config
   validate_config
@@ -147,8 +153,10 @@ load_scenario_config() {
 }
 
 validate_config() {
-  validate_seed "$CONFIGURED_SEED" "seed"
-  EFFECTIVE_SEED="$(resolve_seed "$CONFIGURED_SEED")"
+  validate_seed "$CONFIGURED_DATASET_SEED" "datasetSeed"
+  validate_seed "$CONFIGURED_WORKLOAD_SEED" "workloadSeed"
+  EFFECTIVE_DATASET_SEED="$(resolve_seed "$CONFIGURED_DATASET_SEED")"
+  EFFECTIVE_WORKLOAD_SEED="$(resolve_seed "$CONFIGURED_WORKLOAD_SEED")"
 
   validate_positive_integer "$SYNTHETIC_KEYWORD_COUNT" "syntheticKeywordCount"
   validate_positive_integer "$SYNTHETIC_DOCUMENTS_PER_KEYWORD" "syntheticDocumentsPerKeyword"
@@ -226,7 +234,11 @@ prepare_paths() {
   fi
 
   ABS_OUTPUT_PATH="$(place_path_in_run_dir "$BASE_OUTPUT_PATH" "$RUN_DATE/$RUN_NAME")"
-  ABS_LOG_DIR="$ROOT_DIR/benchmarkSSE/results/logs/$RUN_DATE/$RUN_NAME"
+  if [[ -n "$ABS_LOG_OUTPUT_DIRECTORY" ]]; then
+    ABS_LOG_DIR="$ABS_LOG_OUTPUT_DIRECTORY/$RUN_NAME"
+  else
+    ABS_LOG_DIR="$ROOT_DIR/benchmarkSSE/results/logs/$RUN_DATE/$RUN_NAME"
+  fi
   LOCAL_RUNTIME_CONFIG_PATH="$ABS_LOG_DIR/runtime_concurrency.properties"
   RUN_LOG_PATH="$ABS_LOG_DIR/run_concurrency_quinta.log"
   EXPECTED_ASSOCIATION_COUNT=$((SYNTHETIC_KEYWORD_COUNT * SYNTHETIC_DOCUMENTS_PER_KEYWORD))
@@ -246,8 +258,10 @@ start_log_capture() {
   echo "SSE replicas: $REPLICA_COUNT"
   echo "ORAM replicas: $ORAM_REPLICA_COUNT"
   echo "Clients: $CLIENT_COUNT"
-  echo "Configured seed: $CONFIGURED_SEED"
-  echo "Effective seed: $EFFECTIVE_SEED"
+  echo "Configured dataset seed: $CONFIGURED_DATASET_SEED"
+  echo "Effective dataset seed: $EFFECTIVE_DATASET_SEED"
+  echo "Configured workload seed: $CONFIGURED_WORKLOAD_SEED"
+  echo "Effective workload seed: $EFFECTIVE_WORKLOAD_SEED"
 }
 
 generate_dataset() {
@@ -257,7 +271,7 @@ generate_dataset() {
     --vocabulary "$ABS_VOCABULARY_PATH" \
     --keywords-per-doc-count "$SYNTHETIC_KEYWORD_COUNT" \
     --doc-counts "$SYNTHETIC_DOCUMENTS_PER_KEYWORD" \
-    --seed "$EFFECTIVE_SEED"
+    --seed "$EFFECTIVE_DATASET_SEED"
 
   [[ -s "$ABS_SYNTHETIC_OUTPUT_PATH" ]] || die "Generated synthetic dataset is empty"
   [[ "$(wc -l < "$ABS_SYNTHETIC_OUTPUT_PATH")" -eq "$SYNTHETIC_KEYWORD_COUNT" ]] \
@@ -270,15 +284,17 @@ write_local_runtime_config() {
     printf 'runtimeSseReplicas=%s\n' "$REPLICA_COUNT"
     printf 'runtimeOramReplicas=%s\n' "$ORAM_REPLICA_COUNT"
     printf 'runtimeOramMaxConcurrentClients=%s\n' "$ORAM_MAX_CONCURRENT_CLIENTS"
-    printf 'runtimeConfiguredSeed=%s\n' "$CONFIGURED_SEED"
-    printf 'runtimeEffectiveSeed=%s\n' "$EFFECTIVE_SEED"
+    printf 'runtimeConfiguredDatasetSeed=%s\n' "$CONFIGURED_DATASET_SEED"
+    printf 'runtimeEffectiveDatasetSeed=%s\n' "$EFFECTIVE_DATASET_SEED"
+    printf 'runtimeConfiguredWorkloadSeed=%s\n' "$CONFIGURED_WORKLOAD_SEED"
+    printf 'runtimeEffectiveWorkloadSeed=%s\n' "$EFFECTIVE_WORKLOAD_SEED"
     printf 'scenario=%s\n' "$SCENARIO"
     printf 'clientId=%s\n' "$CLIENT_ID"
     printf 'clientCount=%s\n' "$CLIENT_COUNT"
     printf 'warmupSeconds=%s\n' "$WARMUP_SECONDS"
     printf 'measurementSeconds=%s\n' "$MEASUREMENT_SECONDS"
     printf 'warmupKeywordCount=%s\n' "$WARMUP_KEYWORD_COUNT"
-    printf 'seed=%s\n' "$EFFECTIVE_SEED"
+    printf 'seed=%s\n' "$EFFECTIVE_WORKLOAD_SEED"
     printf 'vocabularyPath=%s\n' "$BENCHMARK_REMOTE_VOCABULARY_PATH"
     printf 'inputPath=%s\n' "$REMOTE_DATASET_PATH"
     printf 'outputPath=%s\n' "$REMOTE_OUTPUT_PATH"
