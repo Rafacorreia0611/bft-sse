@@ -182,6 +182,7 @@ load_config() {
   SSE_REPLICAS="$(get_property sseReplicas)"
   CONFIGURED_ORAM_REPLICAS="$(get_property oramReplicas)"
   POPULATE_CLIENT_ID="$(get_property populateClientId)"
+  POPULATE_CLIENT_COUNT="$(get_property populateClientCount)"
   POPULATE_BATCH_SIZE="$(get_property populateBatchSize)"
   CLIENT_ID="$(get_property clientId)"
   WARMUP_SECONDS="$(get_property warmupSeconds)"
@@ -212,6 +213,7 @@ validate_config() {
   fi
 
   validate_positive_integer "$POPULATE_CLIENT_ID" "populateClientId"
+  validate_positive_integer "$POPULATE_CLIENT_COUNT" "populateClientCount"
   validate_positive_integer "$POPULATE_BATCH_SIZE" "populateBatchSize"
   validate_positive_integer "$CLIENT_ID" "clientId"
   validate_positive_integer "$WARMUP_SECONDS" "warmupSeconds"
@@ -228,11 +230,16 @@ validate_config() {
   parse_search_percentages
   parse_access_profiles
 
+  HIGHEST_POPULATE_CLIENT_ID=$((POPULATE_CLIENT_ID + POPULATE_CLIENT_COUNT - 1))
+  (( HIGHEST_POPULATE_CLIENT_ID <= 2147482647 )) \
+    || die "Population client IDs exceed the supported ORAM client ID range"
+
   HIGHEST_CLIENT_ID=$((CLIENT_ID + MAX_CLIENT_COUNT - 1))
   (( HIGHEST_CLIENT_ID <= 2147482647 )) \
     || die "Configured client IDs exceed the supported ORAM client ID range"
-  if (( POPULATE_CLIENT_ID >= CLIENT_ID && POPULATE_CLIENT_ID <= HIGHEST_CLIENT_ID )); then
-    die "populateClientId overlaps the benchmark client ID range"
+  if (( POPULATE_CLIENT_ID <= HIGHEST_CLIENT_ID \
+      && CLIENT_ID <= HIGHEST_POPULATE_CLIENT_ID )); then
+    die "Population and benchmark client ID ranges overlap"
   fi
 
   # shellcheck source=/dev/null
@@ -295,6 +302,7 @@ write_resolved_config() {
     printf 'sseReplicas=%s\n' "$SSE_REPLICAS"
     printf 'oramReplicas=%s\n' "$CONFIGURED_ORAM_REPLICAS"
     printf 'populateClientId=%s\n' "$POPULATE_CLIENT_ID"
+    printf 'populateClientCount=%s\n' "$POPULATE_CLIENT_COUNT"
     printf 'populateBatchSize=%s\n' "$POPULATE_BATCH_SIZE"
     printf 'clientId=%s\n' "$CLIENT_ID"
     printf 'clientCount=%s\n' "$client_count"
@@ -494,6 +502,7 @@ cleanup() {
 
 print_plan() {
   echo "Quinta client scalability benchmark" | tee -a "$SWEEP_LOG_PATH"
+  echo "Population clients: $POPULATE_CLIENT_COUNT" | tee -a "$SWEEP_LOG_PATH"
   echo "Clients: ${CLIENT_COUNTS[*]}" | tee -a "$SWEEP_LOG_PATH"
   echo "Search percentages: ${SEARCH_PERCENTAGES[*]}" | tee -a "$SWEEP_LOG_PATH"
   echo "Access distributions: ${ACCESS_DISTRIBUTIONS[*]}" | tee -a "$SWEEP_LOG_PATH"
