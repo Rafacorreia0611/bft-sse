@@ -34,6 +34,8 @@ public final class PopulateDBHandler implements AutoCloseable {
     private final SSEInitCoordinator initCoordinator;
     private final KeywordDocIdsReader datasetReader;
     private final int batchSize;
+    private State currentState;
+    private SecretKey masterKey;
 
     public PopulateDBHandler(ConfidentialClientAdapter adapter) {
         this(adapter, DEFAULT_BATCH_SIZE);
@@ -72,13 +74,25 @@ public final class PopulateDBHandler implements AutoCloseable {
     }
 
     public PopulationSummary populate(Path inputPath) {
+        return populate(inputPath, 0, 1);
+    }
+
+    public void initialize() {
+        if (currentState != null && masterKey != null) {
+            return;
+        }
+
+        initCoordinator.initializeOrConnect();
+        ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
+        currentState = stateRequest.state();
+        masterKey = stateRequest.masterKey();
+    }
+
+    public PopulationSummary populate(Path inputPath, int workerIndex, int workerCount) {
+        validateWorkerPartition(workerIndex, workerCount);
+        initialize();
+
         try (BufferedReader reader = datasetReader.openReader(inputPath)) {
-            initCoordinator.initializeOrConnect();
-
-            ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
-            State currentState = stateRequest.state();
-            SecretKey masterKey = stateRequest.masterKey();
-
             long processedKeywords = 0L;
             long processedDocIds = 0L;
             long sentBatches = 0L;
@@ -90,6 +104,10 @@ public final class PopulateDBHandler implements AutoCloseable {
 
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
+                if ((lineNumber - 1L) % workerCount != workerIndex) {
+                    continue;
+                }
+
                 KeywordDocIdsEntry entry = datasetReader.parseEntry(line, lineNumber);
                 if (entry == null) {
                     continue;
@@ -128,6 +146,17 @@ public final class PopulateDBHandler implements AutoCloseable {
             return new PopulationSummary(processedKeywords, processedDocIds, sentBatches);
         } catch (IOException e) {
             throw new IllegalStateException("Failed while reading NDJSON input " + inputPath.toAbsolutePath(), e);
+        }
+    }
+
+    private void validateWorkerPartition(int workerIndex, int workerCount) {
+        if (workerCount <= 0) {
+            throw new IllegalArgumentException("workerCount must be greater than zero");
+        }
+        if (workerIndex < 0 || workerIndex >= workerCount) {
+            throw new IllegalArgumentException(
+                    "workerIndex must be between 0 and " + (workerCount - 1)
+            );
         }
     }
 
@@ -191,7 +220,8 @@ public final class PopulateDBHandler implements AutoCloseable {
 
     private void printProgress(long processedKeywords, long processedDocIds, long sentBatches, long startTimeNanos) {
         long elapsedSeconds = Math.max(1L, (System.nanoTime() - startTimeNanos) / 1_000_000_000L);
-        String message = "\rPopulateDB progress: keywords=" + processedKeywords
+        String message = "\rPopulateDB client=" + adapter.clientId()
+                + " progress: keywords=" + processedKeywords
                 + " | docIds=" + processedDocIds
                 + " | batches=" + sentBatches
                 + " | elapsed=" + formatDuration(elapsedSeconds);
