@@ -10,6 +10,12 @@ import sse.oram.ORAMSettings;
 public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
 
     private final int clientCount;
+    private final int workerId;
+    private final int workerCount;
+    private final int clientIndexStart;
+    private final int localClientCount;
+    private final String coordinatorHost;
+    private final int coordinatorPort;
     private final int warmupSeconds;
     private final int measurementSeconds;
     private final int warmupKeywordCount;
@@ -23,6 +29,12 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
     ConcurrentWorkloadConfig(Properties properties, Path configDirectory) {
         super(properties, configDirectory);
         this.clientCount = requirePositiveInt("clientCount");
+        this.workerId = requireNonNegativeInt("workerId");
+        this.workerCount = requirePositiveInt("workerCount");
+        this.clientIndexStart = requireNonNegativeInt("clientIndexStart");
+        this.localClientCount = requirePositiveInt("localClientCount");
+        this.coordinatorHost = requireProperty("coordinatorHost");
+        this.coordinatorPort = requirePositiveInt("coordinatorPort");
         this.warmupSeconds = requirePositiveInt("warmupSeconds");
         this.measurementSeconds = requirePositiveInt("measurementSeconds");
         this.warmupKeywordCount = requirePositiveInt("warmupKeywordCount");
@@ -51,6 +63,18 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
             this.sharedKeywordCount = 0;
         }
 
+        if (workerId >= workerCount) {
+            throw new IllegalArgumentException("Property workerId must be smaller than workerCount");
+        }
+        if (coordinatorPort > 65535) {
+            throw new IllegalArgumentException("Property coordinatorPort must not exceed 65535");
+        }
+
+        long localClientEnd = (long) clientIndexStart + localClientCount;
+        if (localClientEnd > clientCount) {
+            throw new IllegalArgumentException("Worker client range exceeds the total clientCount");
+        }
+
         long highestClientId = (long) clientId() + clientCount - 1L;
         if (highestClientId > Integer.MAX_VALUE - ORAMSettings.DEFAULT_ORAM_CLIENT_ID_OFFSET) {
             throw new IllegalArgumentException("Configured client IDs exceed the supported ORAM client ID range");
@@ -59,6 +83,30 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
 
     public int clientCount() {
         return clientCount;
+    }
+
+    public int workerId() {
+        return workerId;
+    }
+
+    public int workerCount() {
+        return workerCount;
+    }
+
+    public int clientIndexStart() {
+        return clientIndexStart;
+    }
+
+    public int localClientCount() {
+        return localClientCount;
+    }
+
+    public String coordinatorHost() {
+        return coordinatorHost;
+    }
+
+    public int coordinatorPort() {
+        return coordinatorPort;
     }
 
     public int warmupSeconds() {
@@ -101,11 +149,15 @@ public final class ConcurrentWorkloadConfig extends BenchmarkConfig {
         return sharedKeywordCount;
     }
 
-    public int clientIdForIndex(int clientIndex) {
-        if (clientIndex < 0 || clientIndex >= clientCount) {
-            throw new IllegalArgumentException("clientIndex is outside the configured client range");
+    public int globalClientIndex(int localClientIndex) {
+        if (localClientIndex < 0 || localClientIndex >= localClientCount) {
+            throw new IllegalArgumentException("localClientIndex is outside this worker's client range");
         }
-        return clientId() + clientIndex;
+        return clientIndexStart + localClientIndex;
+    }
+
+    public int clientIdForLocalIndex(int localClientIndex) {
+        return clientId() + globalClientIndex(localClientIndex);
     }
 
     private double requirePositiveDouble(String key) {

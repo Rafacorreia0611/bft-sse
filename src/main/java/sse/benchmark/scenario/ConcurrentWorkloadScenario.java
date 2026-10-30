@@ -28,6 +28,7 @@ import sse.benchmark.KeywordSelectionDistribution;
 import sse.benchmark.LockContentionLevel;
 import sse.benchmark.configs.BenchmarkConfig;
 import sse.benchmark.configs.ConcurrentWorkloadConfig;
+import sse.benchmark.coordination.BenchmarkSynchronizer;
 import sse.dataset.KeywordDocIdsEntry;
 import sse.dataset.KeywordDocIdsReader;
 import sse.demo.client.ConfidentialClientAdapter;
@@ -88,99 +89,126 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         ExecutorService executor = null;
         CountDownLatch warmupStart = new CountDownLatch(1);
         CountDownLatch measurementStart = new CountDownLatch(1);
+        int activePhase = BenchmarkSynchronizer.PHASE_WARMUP;
 
-        try {
-            createAndInitializeClients(scenarioConfig, vocabularyPath, adapters, clientHandlers);
-            executor = Executors.newFixedThreadPool(scenarioConfig.clientCount());
+        try (BenchmarkSynchronizer synchronizer = BenchmarkSynchronizer.open(
+                scenarioConfig,
+                (int) COORDINATION_TIMEOUT_SECONDS
+        )) {
+            try {
+                createAndInitializeLocalClients(scenarioConfig, vocabularyPath, adapters, clientHandlers);
+                executor = Executors.newFixedThreadPool(scenarioConfig.localClientCount());
 
-            CountDownLatch workersReady = new CountDownLatch(scenarioConfig.clientCount());
-            CountDownLatch warmupFinished = new CountDownLatch(scenarioConfig.clientCount());
-            AtomicLong warmupDeadlineNanos = new AtomicLong();
-            AtomicLong measurementStartNanos = new AtomicLong();
-            AtomicLong measurementDeadlineNanos = new AtomicLong();
-            AtomicReference<Throwable> firstFailure = new AtomicReference<Throwable>();
-            List<Future<List<ConcurrentOperationResult>>> futures =
-                    new ArrayList<Future<List<ConcurrentOperationResult>>>(scenarioConfig.clientCount());
+                CountDownLatch workersReady = new CountDownLatch(scenarioConfig.localClientCount());
+                CountDownLatch warmupFinished = new CountDownLatch(scenarioConfig.localClientCount());
+                AtomicLong warmupDeadlineNanos = new AtomicLong();
+                AtomicLong measurementStartNanos = new AtomicLong();
+                AtomicLong measurementDeadlineNanos = new AtomicLong();
+                AtomicReference<Throwable> firstFailure = new AtomicReference<Throwable>();
+                List<Future<List<ConcurrentOperationResult>>> futures =
+                        new ArrayList<Future<List<ConcurrentOperationResult>>>(scenarioConfig.localClientCount());
 
-            for (int clientIndex = 0; clientIndex < scenarioConfig.clientCount(); clientIndex++) {
-                final int workerIndex = clientIndex;
-                final SSEClientHandler handler = clientHandlers.get(clientIndex);
-                futures.add(executor.submit(() -> runClient(
-                        workerIndex,
-                        handler,
-                        scenarioConfig,
-                        warmupEntries,
-                        measurementEntries,
-                        warmupSelectionCdf,
-                        measurementSelectionCdf,
-                        workersReady,
-                        warmupStart,
+                for (int localClientIndex = 0;
+                     localClientIndex < scenarioConfig.localClientCount();
+                     localClientIndex++) {
+                    final int workerLocalIndex = localClientIndex;
+                    final SSEClientHandler handler = clientHandlers.get(localClientIndex);
+                    futures.add(executor.submit(() -> runClient(
+                            workerLocalIndex,
+                            handler,
+                            scenarioConfig,
+                            warmupEntries,
+                            measurementEntries,
+                            warmupSelectionCdf,
+                            measurementSelectionCdf,
+                            workersReady,
+                            warmupStart,
+                            warmupFinished,
+                            measurementStart,
+                            warmupDeadlineNanos,
+                            measurementStartNanos,
+                            measurementDeadlineNanos,
+                            firstFailure
+                    )));
+                }
+
+                awaitLatch(workersReady, COORDINATION_TIMEOUT_SECONDS, "local clients to become ready");
+                rethrowWorkerFailure(firstFailure.get());
+                System.out.println("Worker " + scenarioConfig.workerId() + " is ready with "
+                        + scenarioConfig.localClientCount() + " local clients; waiting for warm-up release...");
+
+                long warmupStartTime = synchronizer.awaitPhase(BenchmarkSynchronizer.PHASE_WARMUP);
+                warmupDeadlineNanos.set(warmupStartTime
+                        + TimeUnit.SECONDS.toNanos(scenarioConfig.warmupSeconds()));
+                warmupStart.countDown();
+                awaitLatch(
                         warmupFinished,
-                        measurementStart,
-                        warmupDeadlineNanos,
-                        measurementStartNanos,
-                        measurementDeadlineNanos,
-                        firstFailure
-                )));
-            }
+                        scenarioConfig.warmupSeconds() + COORDINATION_TIMEOUT_SECONDS,
+                        "local clients to finish warm-up"
+                );
+                rethrowWorkerFailure(firstFailure.get());
 
-            awaitLatch(workersReady, COORDINATION_TIMEOUT_SECONDS, "clients to become ready");
-            System.out.println("Starting " + scenarioConfig.warmupSeconds() + " second warm-up with "
-                    + scenarioConfig.clientCount() + " clients...");
-            warmupDeadlineNanos.set(System.nanoTime()
-                    + TimeUnit.SECONDS.toNanos(scenarioConfig.warmupSeconds()));
-            warmupStart.countDown();
-            awaitLatch(
-                    warmupFinished,
-                    scenarioConfig.warmupSeconds() + COORDINATION_TIMEOUT_SECONDS,
-                    "clients to finish warm-up"
-            );
-            rethrowWorkerFailure(firstFailure.get());
+                activePhase = BenchmarkSynchronizer.PHASE_MEASUREMENT;
+                System.out.println("Worker " + scenarioConfig.workerId()
+                        + " finished warm-up; waiting for measurement release...");
+                long measuredStart = synchronizer.awaitPhase(BenchmarkSynchronizer.PHASE_MEASUREMENT);
+                measurementStartNanos.set(measuredStart);
+                measurementDeadlineNanos.set(measuredStart
+                        + TimeUnit.SECONDS.toNanos(scenarioConfig.measurementSeconds()));
+                measurementStart.countDown();
 
-            long measuredStart = System.nanoTime();
-            measurementStartNanos.set(measuredStart);
-            measurementDeadlineNanos.set(measuredStart
-                    + TimeUnit.SECONDS.toNanos(scenarioConfig.measurementSeconds()));
-            measurementStart.countDown();
-
-            List<ConcurrentOperationResult> results = new ArrayList<ConcurrentOperationResult>();
-            long completionDeadline = measuredStart + TimeUnit.SECONDS.toNanos(
-                    scenarioConfig.measurementSeconds() + COORDINATION_TIMEOUT_SECONDS);
-            for (Future<List<ConcurrentOperationResult>> future : futures) {
-                long remainingNanos = completionDeadline - System.nanoTime();
-                if (remainingNanos <= 0L) {
-                    throw new TimeoutException("Timed out waiting for concurrent benchmark clients to finish");
+                List<ConcurrentOperationResult> results = new ArrayList<ConcurrentOperationResult>();
+                long completionDeadline = measuredStart + TimeUnit.SECONDS.toNanos(
+                        scenarioConfig.measurementSeconds() + COORDINATION_TIMEOUT_SECONDS);
+                for (Future<List<ConcurrentOperationResult>> future : futures) {
+                    long remainingNanos = completionDeadline - System.nanoTime();
+                    if (remainingNanos <= 0L) {
+                        throw new TimeoutException("Timed out waiting for local benchmark clients to finish");
+                    }
+                    results.addAll(future.get(remainingNanos, TimeUnit.NANOSECONDS));
                 }
-                results.addAll(future.get(remainingNanos, TimeUnit.NANOSECONDS));
-            }
-            rethrowWorkerFailure(firstFailure.get());
+                rethrowWorkerFailure(firstFailure.get());
 
-            Collections.sort(results, Comparator
-                    .comparingLong(ConcurrentOperationResult::startOffsetNanos)
-                    .thenComparingInt(ConcurrentOperationResult::clientId)
-                    .thenComparingLong(ConcurrentOperationResult::clientOperation));
-            int searchCount = 0;
-            for (ConcurrentOperationResult result : results) {
-                resultWriter.writeConcurrentSample(name(), result);
-                if (result.operation() == BenchmarkOperation.SEARCH) {
-                    searchCount++;
+                activePhase = BenchmarkSynchronizer.PHASE_FINISHED;
+                Collections.sort(results, Comparator
+                        .comparingLong(ConcurrentOperationResult::startOffsetNanos)
+                        .thenComparingInt(ConcurrentOperationResult::clientId)
+                        .thenComparingLong(ConcurrentOperationResult::clientOperation));
+                int searchCount = 0;
+                for (ConcurrentOperationResult result : results) {
+                    resultWriter.writeConcurrentSample(name(), result);
+                    if (result.operation() == BenchmarkOperation.SEARCH) {
+                        searchCount++;
+                    }
                 }
-            }
 
-            double throughput = results.size() / (double) scenarioConfig.measurementSeconds();
-            printSummary(results.size(), searchCount, throughput, scenarioConfig.searchPercentage());
-        } finally {
-            warmupStart.countDown();
-            measurementStart.countDown();
-            if (executor != null) {
-                executor.shutdownNow();
+                double throughput = results.size() / (double) scenarioConfig.measurementSeconds();
+                printSummary(
+                        scenarioConfig.workerId(),
+                        results.size(),
+                        searchCount,
+                        throughput,
+                        scenarioConfig.searchPercentage()
+                );
+                System.out.println("Worker " + scenarioConfig.workerId()
+                        + " wrote its results; waiting for the remaining workers...");
+                synchronizer.awaitPhase(BenchmarkSynchronizer.PHASE_FINISHED);
+            } catch (Exception | Error failure) {
+                synchronizer.reportFailure(activePhase, failure);
+                throw failure;
+            } finally {
+                warmupStart.countDown();
+                measurementStart.countDown();
+                if (executor != null) {
+                    executor.shutdownNow();
+                }
+                closeClients(clientHandlers, adapters);
             }
-            closeClients(clientHandlers, adapters);
         }
     }
 
     private List<ConcurrentOperationResult> runClient(
-            int clientIndex,
+            int localClientIndex,
             SSEClientHandler clientHandler,
             ConcurrentWorkloadConfig config,
             List<KeywordDocIdsEntry> warmupEntries,
@@ -196,8 +224,9 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
             AtomicLong measurementDeadlineNanos,
             AtomicReference<Throwable> firstFailure) {
         List<ConcurrentOperationResult> results = new ArrayList<ConcurrentOperationResult>();
-        Random random = new Random(config.seed() + clientIndex);
-        int clientId = config.clientIdForIndex(clientIndex);
+        int globalClientIndex = config.globalClientIndex(localClientIndex);
+        Random random = new Random(config.seed() + globalClientIndex);
+        int clientId = config.clientIdForLocalIndex(localClientIndex);
         boolean warmupFinishedSignalled = false;
 
         try {
@@ -210,7 +239,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                 KeywordDocIdsEntry entry;
                 if (config.isLockContentionScenario()) {
                     selectedOperation = BenchmarkOperation.UPDATE;
-                    entry = selectContentionEntry(warmupEntries, random, clientIndex, config);
+                    entry = selectContentionEntry(warmupEntries, random, globalClientIndex, config);
                 } else {
                     selectedOperation = selectOperation(random, config.searchPercentage());
                     entry = selectWorkloadEntry(warmupEntries, warmupSelectionCdf, random);
@@ -238,7 +267,7 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
                 KeywordDocIdsEntry entry;
                 if (config.isLockContentionScenario()) {
                     selectedOperation = BenchmarkOperation.UPDATE;
-                    entry = selectContentionEntry(measurementEntries, random, clientIndex, config);
+                    entry = selectContentionEntry(measurementEntries, random, globalClientIndex, config);
                 } else {
                     selectedOperation = selectOperation(random, config.searchPercentage());
                     entry = selectWorkloadEntry(measurementEntries, measurementSelectionCdf, random);
@@ -348,24 +377,25 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         return documentIds;
     }
 
-    private void printSummary(int operationCount,
+    private void printSummary(int workerId,
+                              int operationCount,
                               int searchCount,
                               double throughput,
                               int searchPercentage) {
         if (searchPercentage == 100) {
-            System.out.println("Measured " + operationCount + " completed searches; throughput="
-                    + throughput + " ops/s.");
+            System.out.println("Worker " + workerId + " measured " + operationCount
+                    + " completed searches; local throughput=" + throughput + " ops/s.");
             return;
         }
         if (searchPercentage == 0) {
-            System.out.println("Measured " + operationCount + " completed updates; throughput="
-                    + throughput + " ops/s.");
+            System.out.println("Worker " + workerId + " measured " + operationCount
+                    + " completed updates; local throughput=" + throughput + " ops/s.");
             return;
         }
 
         int updateCount = operationCount - searchCount;
-        System.out.println("Measured " + operationCount + " completed operations ("
-                + searchCount + " searches, " + updateCount + " updates); throughput="
+        System.out.println("Worker " + workerId + " measured " + operationCount + " completed operations ("
+                + searchCount + " searches, " + updateCount + " updates); local throughput="
                 + throughput + " ops/s.");
     }
 
@@ -430,12 +460,14 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         }
     }
 
-    private void createAndInitializeClients(ConcurrentWorkloadConfig config,
-                                            Path vocabularyPath,
-                                            List<ConfidentialClientAdapter> adapters,
-                                            List<SSEClientHandler> clientHandlers) {
-        for (int clientIndex = 0; clientIndex < config.clientCount(); clientIndex++) {
-            int clientId = config.clientIdForIndex(clientIndex);
+    private void createAndInitializeLocalClients(ConcurrentWorkloadConfig config,
+                                                 Path vocabularyPath,
+                                                 List<ConfidentialClientAdapter> adapters,
+                                                 List<SSEClientHandler> clientHandlers) {
+        for (int localClientIndex = 0;
+             localClientIndex < config.localClientCount();
+             localClientIndex++) {
+            int clientId = config.clientIdForLocalIndex(localClientIndex);
             ConfidentialClientAdapter adapter = createAdapter(clientId);
             adapters.add(adapter);
             SSEClientHandler clientHandler = new SSEClientHandler(adapter, vocabularyPath);
