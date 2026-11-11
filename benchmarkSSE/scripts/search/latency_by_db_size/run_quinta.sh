@@ -465,28 +465,9 @@ stop_node_health_monitor() {
 }
 
 fetch_replica_logs() {
-  local node replica_id remote_log
-  local copy_failed=0
-
   [[ "$CURRENT_RUN_ACTIVE" -eq 1 ]] || return
   [[ "$REPLICA_LOGS_FETCHED" -eq 0 ]] || return
-  echo "Fetching replica logs..."
-
-  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
-    node="${QUINTA_NODES[$((replica_id % ${#QUINTA_NODES[@]}))]}"
-    remote_log="$(remote_run_dir)/oramRep${replica_id}/server.log"
-    scp_remote "${QUINTA_SSH_PREFIX}${node}:$remote_log" "$ABS_LOG_DIR/oramRep${replica_id}.log" \
-      || copy_failed=1
-  done
-
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
-    node="${QUINTA_NODES[$((replica_id % ${#QUINTA_NODES[@]}))]}"
-    remote_log="$(remote_run_dir)/rep${replica_id}/server.log"
-    scp_remote "${QUINTA_SSH_PREFIX}${node}:$remote_log" "$ABS_LOG_DIR/rep${replica_id}.log" \
-      || copy_failed=1
-  done
-
-  [[ "$copy_failed" -eq 0 ]] || return 1
+  fetch_all_replica_logs || return 1
   REPLICA_LOGS_FETCHED=1
 }
 

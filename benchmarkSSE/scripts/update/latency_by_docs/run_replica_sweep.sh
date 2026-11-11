@@ -282,6 +282,7 @@ main() {
   echo "Configured seed: $CONFIGURED_SEED" | tee -a "$SWEEP_LOG_PATH"
   echo "Effective seed: $EFFECTIVE_SEED" | tee -a "$SWEEP_LOG_PATH"
 
+  preclean_all_benchmark_nodes
   local sse_replicas
   for sse_replicas in "${REPLICA_COUNTS[@]}"; do
     run_one_benchmark "$sse_replicas"

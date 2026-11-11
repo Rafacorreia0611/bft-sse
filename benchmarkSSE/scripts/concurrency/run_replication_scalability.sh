@@ -536,6 +536,7 @@ main() {
 
   write_manifest_header
   print_plan
+  preclean_all_benchmark_nodes
   run_all_benchmarks
   summarize_results
   verify_outputs

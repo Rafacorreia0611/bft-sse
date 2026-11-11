@@ -388,26 +388,8 @@ run_benchmark_remote() {
 }
 
 fetch_replica_logs() {
-  local node replica_id remote_log
-  local copy_failed=0
-
   [[ "$REPLICA_LOGS_FETCHED" -eq 0 ]] || return
-
-  for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
-    node="${QUINTA_NODES[$((replica_id % ${#QUINTA_NODES[@]}))]}"
-    remote_log="$(remote_run_dir)/oramRep${replica_id}/server.log"
-    scp_remote "${QUINTA_SSH_PREFIX}${node}:$remote_log" "$ABS_LOG_DIR/oramRep${replica_id}.log" \
-      || copy_failed=1
-  done
-
-  for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
-    node="${QUINTA_NODES[$((replica_id % ${#QUINTA_NODES[@]}))]}"
-    remote_log="$(remote_run_dir)/rep${replica_id}/server.log"
-    scp_remote "${QUINTA_SSH_PREFIX}${node}:$remote_log" "$ABS_LOG_DIR/rep${replica_id}.log" \
-      || copy_failed=1
-  done
-
-  if [[ "$copy_failed" -ne 0 ]]; then
+  if ! fetch_all_replica_logs; then
     echo "Warning: one or more replica logs could not be downloaded." >&2
     return 1
   fi
@@ -496,6 +478,7 @@ main() {
 
   prepare_directories
   generate_dataset
+  deploy_arg preclean
   deploy_arg preflight
   deploy_arg deploy
   SERVERS_MAY_BE_RUNNING=1

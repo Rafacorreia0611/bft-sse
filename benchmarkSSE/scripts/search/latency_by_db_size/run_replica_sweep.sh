@@ -283,6 +283,7 @@ main() {
 
   SUMMARY_PATHS=()
   log_sweep_configuration
+  preclean_all_benchmark_nodes
 
   local sse_replicas
   for sse_replicas in "${REPLICA_COUNTS[@]}"; do

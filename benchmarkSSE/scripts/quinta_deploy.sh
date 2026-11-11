@@ -16,6 +16,7 @@ COORDINATOR_PORT=""
 RUN_NAME="latest"
 BENCHMARK_SSE_CHECKPOINT_PERIOD=10000000
 BENCHMARK_ORAM_CHECKPOINT_PERIOD=10000000
+DEPLOY_PARALLEL_NODES=4
 
 usage() {
   cat >&2 <<EOF
@@ -32,6 +33,7 @@ Commands:
   stop        Stop remote replicas for the run.
   clean       Remove the remote run directory.
   preclean    Stop stale Quinta benchmark processes, free run ports, and remove the remote run directory.
+  preclean-all  Stop stale benchmark processes on every configured node (for sweep startup).
 
 Options:
   --cluster-config PATH  Default: benchmarkSSE/config/quinta.env
@@ -207,6 +209,7 @@ load_cluster_config() {
   validate_positive_integer "$ORAM_REPLICA_COUNT" "oramReplicas"
   [[ "$ORAM_REPLICA_COUNT" -ge 4 ]] || die "oramReplicas must be at least 4"
   validate_positive_integer "$ORAM_MAX_CONCURRENT_CLIENTS" "oramMaxConcurrentClients"
+  validate_positive_integer "$DEPLOY_PARALLEL_NODES" "DEPLOY_PARALLEL_NODES"
   validate_positive_integer "$CLIENT_MACHINE_COUNT" "client-machines"
   validate_positive_integer "$CLIENT_DEPLOYMENT_COUNT" "client-deployments"
   validate_positive_integer "$BENCHMARK_SSE_CHECKPOINT_PERIOD" "SSE checkpoint period"
@@ -235,6 +238,43 @@ validate_node_capacity() {
 
   (( required_nodes <= ${#QUINTA_NODES[@]} )) || die \
     "$replica_nodes replica nodes and $CLIENT_MACHINE_COUNT physical client machines require $required_nodes nodes, but only ${#QUINTA_NODES[@]} are configured"
+}
+
+run_nodes() {
+  local replica_nodes="$SSE_REPLICA_COUNT"
+  local index
+  (( ORAM_REPLICA_COUNT <= replica_nodes )) || replica_nodes="$ORAM_REPLICA_COUNT"
+  for (( index = 0; index < replica_nodes + CLIENT_MACHINE_COUNT; index++ )); do
+    printf '%s\n' "${QUINTA_NODES[$index]}"
+  done
+}
+
+operation_nodes() {
+  if [[ "$COMMAND" == "preclean-all" ]]; then
+    printf '%s\n' "${QUINTA_NODES[@]}"
+  else
+    run_nodes
+  fi
+}
+
+parallel_nodes() {
+  local action="$1" node index pending=0 failed=0
+  local pids=()
+  while IFS= read -r node; do
+    "$action" "$node" &
+    pids[$pending]="$!"
+    (( pending += 1 ))
+    if (( pending >= DEPLOY_PARALLEL_NODES )); then
+      for (( index = 0; index < pending; index++ )); do
+        wait "${pids[$index]}" || failed=1
+      done
+      pending=0
+    fi
+  done < <(operation_nodes)
+  for (( index = 0; index < pending; index++ )); do
+    wait "${pids[$index]}" || failed=1
+  done
+  (( failed == 0 )) || die "$action failed on at least one node"
 }
 
 validate_port_ranges() {
@@ -712,65 +752,65 @@ prepare_local_deploy() {
 }
 
 deploy() {
-  local replica_id client_index node host remote_dir
+  local node
 
   prepare_local_deploy
 
   print_layout
 
-  echo "Stopping previous processes for this run..."
-  stop
+  echo "Preparing remote directories on $(run_nodes | wc -l | tr -d ' ') nodes..."
+  parallel_nodes prepare_remote_node
+  echo "Copying deployments to ${DEPLOY_PARALLEL_NODES} nodes at a time..."
+  parallel_nodes copy_node_deployments
+  echo "Deployment copies finished."
+}
 
-  echo "Preparing remote directories..."
-  for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    ssh_remote "$host" "rm -rf '$(remote_run_dir)' && mkdir -p '$(remote_run_dir)'"
-  done
+prepare_remote_node() {
+  local host
+  host="$(ssh_host "$1")"
+  ssh_remote "$host" "test ! -e '$(remote_run_dir)' || { echo 'Run directory already exists on $host' >&2; exit 1; }; mkdir -p '$(remote_run_dir)'" \
+    || return 1
+  echo "  Ready on $host"
+}
 
-  echo "Copying replicas..."
+copy_node_deployments() {
+  local node="$1" host remote_dir replica_id client_index components=""
+  host="$(ssh_host "$node")"
+  remote_dir="$(remote_run_dir)"
   for (( replica_id = 0; replica_id < SSE_REPLICA_COUNT; replica_id++ )); do
-    node="$(replica_node "$replica_id")"
-    host="$(ssh_host "$node")"
-    remote_dir="$(remote_run_dir)"
-    echo "  rep$replica_id -> $host"
+    [[ "$(replica_node "$replica_id")" == "$node" ]] || continue
     copy_local_deploy_dir "$ROOT_DIR/build/local/rep${replica_id}" "$host" "$remote_dir"
+    components+=" rep$replica_id"
   done
-
-  echo "Copying ORAM replicas..."
   for (( replica_id = 0; replica_id < ORAM_REPLICA_COUNT; replica_id++ )); do
-    node="$(replica_node "$replica_id")"
-    host="$(ssh_host "$node")"
-    remote_dir="$(remote_run_dir)"
-    echo "  oramRep$replica_id -> $host"
+    [[ "$(replica_node "$replica_id")" == "$node" ]] || continue
     copy_local_deploy_dir "$ROOT_DIR/build/local/oramRep${replica_id}" "$host" "$remote_dir"
+    components+=" oramRep$replica_id"
   done
-
-  echo "Copying clients..."
   for (( client_index = 0; client_index < CLIENT_DEPLOYMENT_COUNT; client_index++ )); do
-    node="$(client_node "$((client_index % CLIENT_MACHINE_COUNT))")"
-    host="$(ssh_host "$node")"
-    remote_dir="$(remote_run_dir)"
-    echo "  cli$client_index -> $host"
+    [[ "$(client_node "$((client_index % CLIENT_MACHINE_COUNT))")" == "$node" ]] || continue
     copy_local_deploy_dir "$ROOT_DIR/build/local/cli${client_index}" "$host" "$remote_dir"
+    components+=" cli$client_index"
   done
+  echo "  $host: copied and verified${components}"
 }
 
 preflight() {
-  local node host expected_ip ports
-
   print_layout
   echo
   echo "Preflight:"
-  for node_index in "${!QUINTA_NODES[@]}"; do
-    node="${QUINTA_NODES[$node_index]}"
-    expected_ip="${QUINTA_NODE_IPS[$node_index]}"
-    host="$(ssh_host "$node")"
-    echo "=== $host ==="
-    ports="$(run_ports_for_node "$node")"
-    if [[ "$expected_ip" == "$QUINTA_TTP_IP" ]]; then
+  parallel_nodes preflight_node
+}
+
+preflight_node() {
+  local node="$1" host expected_ip ports output
+  expected_ip="$(node_ip "$node")"
+  host="$(ssh_host "$node")"
+  ports="$(run_ports_for_node "$node")"
+  if [[ "$expected_ip" == "$QUINTA_TTP_IP" ]]; then
       ports+=" $QUINTA_TTP_PORT $QUINTA_ORAM_TTP_PORT"
-    fi
-    ssh_remote "$host" "
+  fi
+  output="$(ssh_remote "$host" "
       echo whoami=\$(whoami);
       hostname;
       ip -4 addr | grep -q '$expected_ip' || { echo 'Expected IP $expected_ip was not found' >&2; exit 1; };
@@ -788,8 +828,8 @@ preflight() {
           exit 1;
         fi;
       done
-    " || die "Preflight failed on $host"
-  done
+    " 2>&1)" || { echo "Preflight failed on $host: $output" >&2; return 1; }
+  echo "  $host: IP, Java, disk, and ports OK"
 }
 
 start() {
@@ -934,28 +974,30 @@ stop_current_run_processes() {
 }
 
 stop() {
-  local node host port ports listeners
-
   echo "Stopping SSE and ORAM replicas for this run..."
-  for node in "${QUINTA_NODES[@]}"; do
-    stop_current_run_processes "$(ssh_host "$node")" TERM
-  done
+  parallel_nodes stop_node_term
   sleep 2
+  parallel_nodes stop_node_kill_and_check
+}
 
-  for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    listeners="$(stop_current_run_processes "$host" KILL true)" \
+stop_node_term() {
+  stop_current_run_processes "$(ssh_host "$1")" TERM
+}
+
+stop_node_kill_and_check() {
+  local node="$1" host port ports listeners
+  host="$(ssh_host "$node")"
+  listeners="$(stop_current_run_processes "$host" KILL true)" \
       || { echo "$host could not stop processes or list listening ports; refusing to remove this run's files." >&2; return 1; }
-    ports="$(run_ports_for_node "$node")"
-    if [[ "$(node_ip "$node")" == "$QUINTA_TTP_IP" ]]; then
-      ports+=" $QUINTA_TTP_PORT $QUINTA_ORAM_TTP_PORT"
+  ports="$(run_ports_for_node "$node")"
+  if [[ "$(node_ip "$node")" == "$QUINTA_TTP_IP" ]]; then
+    ports+=" $QUINTA_TTP_PORT $QUINTA_ORAM_TTP_PORT"
+  fi
+  for port in $ports; do
+    if printf '%s\n' "$listeners" | grep -q ":$port "; then
+      echo "$host still has port $port in use; refusing to remove this run's files." >&2
+      return 1
     fi
-    for port in $ports; do
-      if printf '%s\n' "$listeners" | grep -q ":$port "; then
-        echo "$host still has port $port in use; refusing to remove this run's files." >&2
-        return 1
-      fi
-    done
   done
 }
 
@@ -973,39 +1015,37 @@ verify_no_stale_benchmark_processes() {
 }
 
 preclean() {
-  local node host
-
-  echo "Stopping all stale processes under $QUINTA_REMOTE_ROOT..."
-  for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    stop_stale_benchmark_processes "$host" TERM
-  done
-
+  echo "Stopping stale benchmark processes on $(operation_nodes | wc -l | tr -d ' ') nodes..."
+  parallel_nodes preclean_node_term
   sleep 2
+  echo "Verifying benchmark processes have stopped..."
+  parallel_nodes preclean_node_kill_and_verify
+  echo "Removing old run directories..."
+  parallel_nodes remove_remote_run_dir
+}
 
-  for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    stop_stale_benchmark_processes "$host" KILL
-    verify_no_stale_benchmark_processes "$host" \
-      || die "$host still has a process running under $QUINTA_REMOTE_ROOT"
-  done
+preclean_node_term() {
+  stop_stale_benchmark_processes "$(ssh_host "$1")" TERM
+}
 
-  for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    echo "Cleaning on $host"
-    ssh_remote "$host" "rm -rf '$(remote_run_dir)'"
-  done
+preclean_node_kill_and_verify() {
+  local host
+  host="$(ssh_host "$1")"
+  stop_stale_benchmark_processes "$host" KILL
+  verify_no_stale_benchmark_processes "$host" \
+    || { echo "$host still has a process running under $QUINTA_REMOTE_ROOT" >&2; return 1; }
+}
+
+remove_remote_run_dir() {
+  local host
+  host="$(ssh_host "$1")"
+  echo "Cleaning on $host"
+  ssh_remote "$host" "rm -rf '$(remote_run_dir)'"
 }
 
 clean() {
-  local node host
-
   stop
-  for node in "${QUINTA_NODES[@]}"; do
-    host="$(ssh_host "$node")"
-    echo "Cleaning on $host"
-    ssh_remote "$host" "rm -rf '$(remote_run_dir)'"
-  done
+  parallel_nodes remove_remote_run_dir
 }
 
 main() {
@@ -1023,6 +1063,7 @@ main() {
     stop) stop ;;
     clean) clean ;;
     preclean) preclean ;;
+    preclean-all) preclean ;;
     *)
       usage
       exit 1

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+LOG_FETCH_PARALLEL=4
+
 die() {
   echo "Error: $*" >&2
   exit 1
@@ -45,6 +47,38 @@ scp_remote() {
     -o ServerAliveInterval="${QUINTA_SSH_SERVER_ALIVE_INTERVAL_SECONDS:-5}" \
     -o ServerAliveCountMax="${QUINTA_SSH_SERVER_ALIVE_COUNT_MAX:-2}" \
     "$@"
+}
+
+fetch_all_replica_logs() {
+  local replica_id node remote_log local_log kind count index pending=0 failed=0
+  local pids=()
+  echo "Fetching $((ORAM_REPLICA_COUNT + REPLICA_COUNT)) replica logs (up to $LOG_FETCH_PARALLEL at once)..."
+  for kind in oramRep rep; do
+    if [[ "$kind" == oramRep ]]; then
+      count="$ORAM_REPLICA_COUNT"
+    else
+      count="$REPLICA_COUNT"
+    fi
+    for (( replica_id = 0; replica_id < count; replica_id++ )); do
+      node="${QUINTA_NODES[$((replica_id % ${#QUINTA_NODES[@]}))]}"
+      remote_log="$(remote_run_dir)/${kind}${replica_id}/server.log"
+      local_log="$ABS_LOG_DIR/${kind}${replica_id}.log"
+      scp_remote "${QUINTA_SSH_PREFIX}${node}:$remote_log" "$local_log" &
+      pids[$pending]="$!"
+      (( pending += 1 ))
+      if (( pending >= LOG_FETCH_PARALLEL )); then
+        for (( index = 0; index < pending; index++ )); do
+          wait "${pids[$index]}" || failed=1
+        done
+        pending=0
+      fi
+    done
+  done
+  for (( index = 0; index < pending; index++ )); do
+    wait "${pids[$index]}" || failed=1
+  done
+  (( failed == 0 )) || return 1
+  echo "Replica logs fetched."
 }
 
 get_property() {
@@ -369,4 +403,10 @@ deploy_arg() {
     --client-machines "$client_machines" \
     "${coordinator_args[@]}" \
     --run-name "$RUN_NAME"
+}
+
+preclean_all_benchmark_nodes() {
+  "$ROOT_DIR/benchmarkSSE/scripts/quinta_deploy.sh" preclean-all \
+    --cluster-config "$CLUSTER_CONFIG" \
+    --run-name "${SWEEP_NAME:-benchmark_sweep}"
 }
