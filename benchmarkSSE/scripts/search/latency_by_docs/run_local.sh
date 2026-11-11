@@ -333,10 +333,10 @@ load_config() {
   ensure_non_empty_file "$ABS_VOCABULARY_PATH"
 
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
-    RUN_DATE="$(date +%d_%m_%Y)"
+    RUN_DATE="$(date +%Y_%m_%d)"
     RUN_NAME="$(date +%H_%M_%S)_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   else
-    RUN_DATE="$(date +%d_%m_%Y)"
+    RUN_DATE="$(date +%Y_%m_%d)"
     RUN_NAME="latest_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   fi
 

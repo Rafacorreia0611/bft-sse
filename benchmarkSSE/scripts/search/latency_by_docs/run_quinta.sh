@@ -190,10 +190,10 @@ load_config() {
     || die "Quinta benchmarks must use the vocabulary deployed from datasets/vocabulary/vocabulary.txt"
 
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
-    RUN_DATE="$(date +%d_%m_%Y)"
+    RUN_DATE="$(date +%Y_%m_%d)"
     RUN_NAME="$(date +%H_%M_%S)_quinta_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   else
-    RUN_DATE="$(date +%d_%m_%Y)"
+    RUN_DATE="$(date +%Y_%m_%d)"
     RUN_NAME="latest_quinta_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   fi
 

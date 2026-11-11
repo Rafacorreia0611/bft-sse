@@ -232,7 +232,7 @@ parse_db_sizes() {
 }
 
 prepare_group_paths() {
-  GROUP_DATE="$(date +%d_%m_%Y)"
+  GROUP_DATE="$(date +%Y_%m_%d)"
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
     GROUP_NAME="$(date +%H_%M_%S)_quinta_update_db_size_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}"
   else

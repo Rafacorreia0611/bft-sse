@@ -241,7 +241,7 @@ validate_config() {
 }
 
 prepare_outputs() {
-  SWEEP_DATE="$(date +%d_%m_%Y)"
+  SWEEP_DATE="$(date +%Y_%m_%d)"
   SWEEP_NAME="$(date +%H_%M_%S)_quinta_lock_contention"
   SWEEP_RESULTS_DIR="$ROOT_DIR/benchmarkSSE/results/data/$SWEEP_DATE/$SWEEP_NAME"
   SWEEP_RAW_DIR="$SWEEP_RESULTS_DIR/raw"

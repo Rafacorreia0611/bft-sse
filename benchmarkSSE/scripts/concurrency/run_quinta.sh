@@ -275,7 +275,7 @@ validate_scenario_config() {
 }
 
 prepare_paths() {
-  RUN_DATE="$(date +%d_%m_%Y)"
+  RUN_DATE="$(date +%Y_%m_%d)"
   if [[ "$TIMESTAMP_OUTPUTS" == "true" ]]; then
     RUN_NAME="$(date +%H_%M_%S)_quinta_concurrency_r${REPLICA_COUNT}_o${ORAM_REPLICA_COUNT}_c${CLIENT_COUNT}"
   else

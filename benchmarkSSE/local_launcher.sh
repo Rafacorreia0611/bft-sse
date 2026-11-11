@@ -134,7 +134,7 @@ validate_args() {
 prepare_log_dir() {
   local run_date run_name
 
-  run_date="$(date +%d_%m_%Y)"
+  run_date="$(date +%Y_%m_%d)"
   run_name="$(date +%H_%M_%S)_local_launcher_s${SSE_SERVER_COUNT}_o${ORAM_SERVER_COUNT}_c${CLIENT_COUNT}"
   ABS_LOG_DIR="$ROOT_DIR/benchmarkSSE/results/logs/$run_date/$run_name"
   PID_FILE="$ABS_LOG_DIR/pids.tmp"
