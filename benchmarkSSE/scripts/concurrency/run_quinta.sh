@@ -7,13 +7,18 @@ DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 DEPLOY_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/quinta_deploy.sh"
 COMMON_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/synthetic_dataset.py"
+MERGE_WORKER_SAMPLES_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/concurrency/merge_worker_samples.py"
 
 CONFIG_PATH=""
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
 
-DEPLOY_CLIENT_COUNT=2
+BENCHMARK_SSE_CHECKPOINT_PERIOD=10000
+BENCHMARK_ORAM_CHECKPOINT_PERIOD=10000
+
 POPULATE_CLIENT_DIR=cli0
-BENCHMARK_CLIENT_DIR=cli1
+
+# MVP-ORAM queues excess clients to bound per-access memory usage.
+ORAM_MAX_CONCURRENT_CLIENTS=10
 
 CLEANUP_DONE=0
 CURRENT_RUN_ACTIVE=0
@@ -27,7 +32,7 @@ source "$COMMON_SCRIPT"
 
 usage() {
   cat >&2 <<EOF
-Usage: $(basename "$0") --config PATH [--cluster-config PATH]
+Usage: $(basename "$0") --config PATH [--cluster-config PATH] [--sseCheckpointPeriod N] [--oramCheckpointPeriod N]
 EOF
 }
 
@@ -52,6 +57,26 @@ parse_args() {
       --cluster-config=*)
         CLUSTER_CONFIG="${1#--cluster-config=}"
         [[ -n "$CLUSTER_CONFIG" ]] || die "Missing value for --cluster-config"
+        shift
+        ;;
+      --sseCheckpointPeriod)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --sseCheckpointPeriod"
+        BENCHMARK_SSE_CHECKPOINT_PERIOD="$2"
+        shift 2
+        ;;
+      --sseCheckpointPeriod=*)
+        BENCHMARK_SSE_CHECKPOINT_PERIOD="${1#--sseCheckpointPeriod=}"
+        [[ -n "$BENCHMARK_SSE_CHECKPOINT_PERIOD" ]] || die "Missing value for --sseCheckpointPeriod"
+        shift
+        ;;
+      --oramCheckpointPeriod)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --oramCheckpointPeriod"
+        BENCHMARK_ORAM_CHECKPOINT_PERIOD="$2"
+        shift 2
+        ;;
+      --oramCheckpointPeriod=*)
+        BENCHMARK_ORAM_CHECKPOINT_PERIOD="${1#--oramCheckpointPeriod=}"
+        [[ -n "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" ]] || die "Missing value for --oramCheckpointPeriod"
         shift
         ;;
       --help|-h)
@@ -88,10 +113,13 @@ load_config() {
   ensure_file_exists "$CONFIG_PATH"
   ensure_file_exists "$CLUSTER_CONFIG"
   ensure_executable_exists "$DEPLOY_SCRIPT"
+  ensure_executable_exists "$MERGE_WORKER_SAMPLES_SCRIPT"
   ensure_file_exists "$SYNTHETIC_DATASET_SCRIPT"
 
   # shellcheck source=/dev/null
   source "$CLUSTER_CONFIG"
+
+  ORAM_MAX_CONCURRENT_CLIENTS="${QUINTA_ORAM_MAX_CONCURRENT_CLIENTS:-$ORAM_MAX_CONCURRENT_CLIENTS}"
 
   VOCABULARY_PATH="$(get_property vocabularyPath)"
   SYNTHETIC_OUTPUT_PATH="$(get_property syntheticOutputPath)"
@@ -107,6 +135,7 @@ load_config() {
   POPULATE_BATCH_SIZE="$(get_property populateBatchSize)"
   CLIENT_ID="$(get_property clientId)"
   CLIENT_COUNT="$(get_property clientCount)"
+  MAX_PHYSICAL_CLIENT_MACHINES="$(get_property maxPhysicalClientMachines)"
 
   SCENARIO="$(get_property scenario)"
   WARMUP_SECONDS="$(get_property warmupSeconds)"
@@ -156,6 +185,8 @@ load_scenario_config() {
 validate_config() {
   validate_seed "$CONFIGURED_DATASET_SEED" "datasetSeed"
   validate_seed "$CONFIGURED_WORKLOAD_SEED" "workloadSeed"
+  validate_positive_integer "$BENCHMARK_SSE_CHECKPOINT_PERIOD" "SSE checkpoint period"
+  validate_positive_integer "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" "ORAM checkpoint period"
   EFFECTIVE_DATASET_SEED="$(resolve_seed "$CONFIGURED_DATASET_SEED")"
   EFFECTIVE_WORKLOAD_SEED="$(resolve_seed "$CONFIGURED_WORKLOAD_SEED")"
 
@@ -176,6 +207,13 @@ validate_config() {
   validate_positive_integer "$POPULATE_BATCH_SIZE" "populateBatchSize"
   validate_positive_integer "$CLIENT_ID" "clientId"
   validate_positive_integer "$CLIENT_COUNT" "clientCount"
+  validate_positive_integer "$MAX_PHYSICAL_CLIENT_MACHINES" "maxPhysicalClientMachines"
+  validate_positive_integer \
+    "$QUINTA_BENCHMARK_COORDINATOR_PORT" \
+    "QUINTA_BENCHMARK_COORDINATOR_PORT"
+  (( QUINTA_BENCHMARK_COORDINATOR_PORT <= 65535 )) \
+    || die "QUINTA_BENCHMARK_COORDINATOR_PORT must not exceed 65535"
+  DEPLOY_COORDINATOR_PORT="$QUINTA_BENCHMARK_COORDINATOR_PORT"
   validate_positive_integer "$WARMUP_SECONDS" "warmupSeconds"
   validate_positive_integer "$MEASUREMENT_SECONDS" "measurementSeconds"
   validate_positive_integer "$WARMUP_KEYWORD_COUNT" "warmupKeywordCount"
@@ -196,11 +234,12 @@ validate_config() {
     die "Population and benchmark client ID ranges overlap"
   fi
 
-  ORAM_MAX_CONCURRENT_CLIENTS="$CLIENT_COUNT"
-  if (( POPULATE_CLIENT_COUNT > ORAM_MAX_CONCURRENT_CLIENTS )); then
-    ORAM_MAX_CONCURRENT_CLIENTS="$POPULATE_CLIENT_COUNT"
+  PHYSICAL_CLIENT_MACHINE_COUNT="$MAX_PHYSICAL_CLIENT_MACHINES"
+  if (( CLIENT_COUNT < PHYSICAL_CLIENT_MACHINE_COUNT )); then
+    PHYSICAL_CLIENT_MACHINE_COUNT="$CLIENT_COUNT"
   fi
-  client_node >/dev/null
+  COORDINATOR_HOST="$(client_node_ip 0)"
+  client_node "$((PHYSICAL_CLIENT_MACHINE_COUNT - 1))" >/dev/null
 
   [[ -s "$ABS_VOCABULARY_PATH" ]] \
     || die "Vocabulary file is missing or empty: $ABS_VOCABULARY_PATH"
@@ -249,11 +288,11 @@ prepare_paths() {
   else
     ABS_LOG_DIR="$ROOT_DIR/benchmarkSSE/results/logs/$RUN_DATE/$RUN_NAME"
   fi
-  LOCAL_RUNTIME_CONFIG_PATH="$ABS_LOG_DIR/runtime_concurrency.properties"
+  LOCAL_WORKER_OUTPUT_DIR="$(dirname "$ABS_OUTPUT_PATH")/workers"
   RUN_LOG_PATH="$ABS_LOG_DIR/run_concurrency_quinta.log"
   EXPECTED_ASSOCIATION_COUNT=$((SYNTHETIC_KEYWORD_COUNT * SYNTHETIC_DOCUMENTS_PER_KEYWORD))
 
-  mkdir -p "$(dirname "$ABS_OUTPUT_PATH")" "$ABS_LOG_DIR"
+  mkdir -p "$(dirname "$ABS_OUTPUT_PATH")" "$LOCAL_WORKER_OUTPUT_DIR" "$ABS_LOG_DIR"
 }
 
 start_log_capture() {
@@ -269,7 +308,11 @@ start_log_capture() {
   echo "ORAM replicas: $ORAM_REPLICA_COUNT"
   echo "Population clients: $POPULATE_CLIENT_COUNT"
   echo "Benchmark clients: $CLIENT_COUNT"
+  echo "Maximum physical client machines: $MAX_PHYSICAL_CLIENT_MACHINES"
+  echo "Physical client machines used: $PHYSICAL_CLIENT_MACHINE_COUNT"
   echo "ORAM max concurrent clients: $ORAM_MAX_CONCURRENT_CLIENTS"
+  echo "SSE checkpoint period: $BENCHMARK_SSE_CHECKPOINT_PERIOD"
+  echo "ORAM checkpoint period: $BENCHMARK_ORAM_CHECKPOINT_PERIOD"
   echo "Configured dataset seed: $CONFIGURED_DATASET_SEED"
   echo "Effective dataset seed: $EFFECTIVE_DATASET_SEED"
   echo "Configured workload seed: $CONFIGURED_WORKLOAD_SEED"
@@ -291,6 +334,13 @@ generate_dataset() {
 }
 
 write_local_runtime_config() {
+  local worker_id="$1"
+  local client_index_start="$2"
+  local local_client_count="$3"
+  local config_path="$4"
+  local remote_vocabulary_path="$5"
+  local remote_output_path="$6"
+
   {
     printf '# Runtime benchmark config generated by %s\n' "$(basename "$0")"
     printf 'runtimeSseReplicas=%s\n' "$REPLICA_COUNT"
@@ -304,13 +354,19 @@ write_local_runtime_config() {
     printf 'scenario=%s\n' "$SCENARIO"
     printf 'clientId=%s\n' "$CLIENT_ID"
     printf 'clientCount=%s\n' "$CLIENT_COUNT"
+    printf 'workerId=%s\n' "$worker_id"
+    printf 'workerCount=%s\n' "$PHYSICAL_CLIENT_MACHINE_COUNT"
+    printf 'clientIndexStart=%s\n' "$client_index_start"
+    printf 'localClientCount=%s\n' "$local_client_count"
+    printf 'coordinatorHost=%s\n' "$COORDINATOR_HOST"
+    printf 'coordinatorPort=%s\n' "$QUINTA_BENCHMARK_COORDINATOR_PORT"
     printf 'warmupSeconds=%s\n' "$WARMUP_SECONDS"
     printf 'measurementSeconds=%s\n' "$MEASUREMENT_SECONDS"
     printf 'warmupKeywordCount=%s\n' "$WARMUP_KEYWORD_COUNT"
     printf 'seed=%s\n' "$EFFECTIVE_WORKLOAD_SEED"
-    printf 'vocabularyPath=%s\n' "$BENCHMARK_REMOTE_VOCABULARY_PATH"
+    printf 'vocabularyPath=%s\n' "$remote_vocabulary_path"
     printf 'inputPath=%s\n' "$REMOTE_DATASET_PATH"
-    printf 'outputPath=%s\n' "$REMOTE_OUTPUT_PATH"
+    printf 'outputPath=%s\n' "$remote_output_path"
 
     if [[ "$SCENARIO" == "concurrent-workload" ]]; then
       printf 'searchPercentage=%s\n' "$SEARCH_PERCENTAGE"
@@ -324,30 +380,56 @@ write_local_runtime_config() {
         printf 'sharedKeywordCount=%s\n' "$SHARED_KEYWORD_COUNT"
       fi
     fi
-  } > "$LOCAL_RUNTIME_CONFIG_PATH"
+  } > "$config_path"
 }
 
 copy_benchmark_inputs() {
-  local host remote_base
-  host="$(client_node)"
+  local worker_id host remote_base local_config remote_config remote_output
+  local remote_vocabulary local_client_count client_index_start=0
+  local base_clients=$((CLIENT_COUNT / PHYSICAL_CLIENT_MACHINE_COUNT))
+  local extra_clients=$((CLIENT_COUNT % PHYSICAL_CLIENT_MACHINE_COUNT))
+
   remote_base="$(remote_run_dir)/benchmark"
-
   REMOTE_DATASET_PATH="$remote_base/input/$(basename "$ABS_SYNTHETIC_OUTPUT_PATH")"
-  REMOTE_RUNTIME_CONFIG_PATH="$remote_base/runtime_concurrency.properties"
-  REMOTE_OUTPUT_PATH="$remote_base/results/$(basename "$ABS_OUTPUT_PATH")"
   POPULATE_REMOTE_VOCABULARY_PATH="$(remote_run_dir)/$POPULATE_CLIENT_DIR/datasets/vocabulary/vocabulary.txt"
-  BENCHMARK_REMOTE_VOCABULARY_PATH="$(remote_run_dir)/$BENCHMARK_CLIENT_DIR/datasets/vocabulary/vocabulary.txt"
+  COORDINATOR_HOST="$(client_node_ip 0)"
+  LOCAL_RUNTIME_CONFIG_PATHS=()
+  REMOTE_RUNTIME_CONFIG_PATHS=()
+  REMOTE_OUTPUT_PATHS=()
+  LOCAL_WORKER_OUTPUT_PATHS=()
 
-  write_local_runtime_config
+  for (( worker_id = 0; worker_id < PHYSICAL_CLIENT_MACHINE_COUNT; worker_id++ )); do
+    local_client_count="$base_clients"
+    if (( worker_id < extra_clients )); then
+      local_client_count=$((local_client_count + 1))
+    fi
 
-  ssh_remote "$host" "mkdir -p '$remote_base/input' '$remote_base/results'"
-  scp_remote "$ABS_SYNTHETIC_OUTPUT_PATH" "$host:$REMOTE_DATASET_PATH"
-  scp_remote "$LOCAL_RUNTIME_CONFIG_PATH" "$host:$REMOTE_RUNTIME_CONFIG_PATH"
+    host="$(client_node "$worker_id")"
+    local_config="$ABS_LOG_DIR/runtime_worker_${worker_id}.properties"
+    remote_config="$remote_base/configs/runtime_worker_${worker_id}.properties"
+    remote_output="$remote_base/results/worker_${worker_id}.csv"
+    remote_vocabulary="$(remote_run_dir)/cli${worker_id}/datasets/vocabulary/vocabulary.txt"
+
+    write_local_runtime_config \
+      "$worker_id" "$client_index_start" "$local_client_count" \
+      "$local_config" "$remote_vocabulary" "$remote_output"
+
+    ssh_remote "$host" "mkdir -p '$remote_base/input' '$remote_base/configs' '$remote_base/results'"
+    scp_remote "$ABS_SYNTHETIC_OUTPUT_PATH" "$host:$REMOTE_DATASET_PATH"
+    scp_remote "$local_config" "$host:$remote_config"
+
+    LOCAL_RUNTIME_CONFIG_PATHS[$worker_id]="$local_config"
+    REMOTE_RUNTIME_CONFIG_PATHS[$worker_id]="$remote_config"
+    REMOTE_OUTPUT_PATHS[$worker_id]="$remote_output"
+    LOCAL_WORKER_OUTPUT_PATHS[$worker_id]="$LOCAL_WORKER_OUTPUT_DIR/worker_${worker_id}.csv"
+    echo "Worker $worker_id: $host, logical clients [$client_index_start,$((client_index_start + local_client_count)))"
+    client_index_start=$((client_index_start + local_client_count))
+  done
 }
 
 run_populate_remote() {
   local host processed_clients processed_doc_ids processed_keywords remote_command
-  host="$(client_node)"
+  host="$(client_node 0)"
   printf -v remote_command \
     'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q --client-id %q --client-count %q --input %q --batch-size %q --vocabulary %q' \
     "$(remote_run_dir)/$POPULATE_CLIENT_DIR" \
@@ -379,18 +461,30 @@ run_populate_remote() {
 }
 
 run_benchmark_remote() {
-  local host remote_command
-  host="$(client_node)"
-  printf -v remote_command \
-    'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q %q' \
-    "$(remote_run_dir)/$BENCHMARK_CLIENT_DIR" \
-    "$QUINTA_CLIENT_JAVA_OPTS" \
-    "sse.benchmark.BenchmarkClient" \
-    "$REMOTE_RUNTIME_CONFIG_PATH"
+  local worker_id host remote_command job_name job_dir
 
-  echo "Running BenchmarkClient on $host..."
-  run_remote_job "$host" "benchmark" "$remote_command" "$ABS_LOG_DIR/benchmark.log"
-  echo "BenchmarkClient finished successfully."
+  echo "Starting $PHYSICAL_CLIENT_MACHINE_COUNT BenchmarkClient workers..."
+  for (( worker_id = 0; worker_id < PHYSICAL_CLIENT_MACHINE_COUNT; worker_id++ )); do
+    host="$(client_node "$worker_id")"
+    job_name="benchmark_worker_${worker_id}"
+    job_dir="$(remote_run_dir)/benchmark/jobs/$job_name"
+    printf -v remote_command \
+      'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q %q' \
+      "$(remote_run_dir)/cli${worker_id}" \
+      "$QUINTA_CLIENT_JAVA_OPTS" \
+      "sse.benchmark.BenchmarkClient" \
+      "${REMOTE_RUNTIME_CONFIG_PATHS[$worker_id]}"
+    start_remote_job "$host" "$job_dir" "$remote_command"
+    echo "Started worker $worker_id on $host"
+  done
+
+  for (( worker_id = 0; worker_id < PHYSICAL_CLIENT_MACHINE_COUNT; worker_id++ )); do
+    host="$(client_node "$worker_id")"
+    wait_remote_job \
+      "$host" "benchmark_worker_${worker_id}" \
+      "$ABS_LOG_DIR/benchmark_worker_${worker_id}.log"
+    echo "Worker $worker_id finished successfully."
+  done
 }
 
 add_monitored_node() {
@@ -406,9 +500,11 @@ add_monitored_node() {
 }
 
 prepare_monitored_nodes() {
-  local node replica_id
+  local node replica_id worker_id
   MONITORED_NODES=()
-  add_monitored_node "$(client_node)"
+  for (( worker_id = 0; worker_id < PHYSICAL_CLIENT_MACHINE_COUNT; worker_id++ )); do
+    add_monitored_node "$(client_node "$worker_id")"
+  done
 
   for (( replica_id = 0; replica_id < REPLICA_COUNT; replica_id++ )); do
     node="${QUINTA_NODES[$((replica_id % ${#QUINTA_NODES[@]}))]}"
@@ -434,7 +530,7 @@ start_node_health_monitor() {
       for host in "${MONITORED_NODES[@]}"; do
         {
           printf '\n===== %s run=%s =====\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_NAME"
-          ssh_remote "$host" "uptime; free -m | awk 'NR <= 3'; ps -eo pid,ppid,pcpu,pmem,rss,etime,args --sort=-pcpu | grep -E 'sse\\.demo\\.server\\.Server|oram\\.server\\.ORAMServer|sse\\.benchmark\\.BenchmarkClient|sse\\.populatedb\\.PopulateDB|[s]martrun\\.sh' | head -20 || true" 2>&1
+          ssh_remote "$host" "uptime; free -m | awk 'NR <= 3'; echo '--- pressure: cpu ---'; cat /proc/pressure/cpu 2>/dev/null || true; echo '--- pressure: memory ---'; cat /proc/pressure/memory 2>/dev/null || true; echo '--- pressure: io ---'; cat /proc/pressure/io 2>/dev/null || true; echo '--- network ---'; cat /proc/net/dev; echo '--- sockets ---'; ss -s 2>/dev/null || true; echo '--- processes ---'; ps -eo pid,ppid,pcpu,pmem,rss,etime,args --sort=-pcpu | grep -E 'sse\\.demo\\.server\\.Server|oram\\.server\\.ORAMServer|sse\\.benchmark\\.BenchmarkClient|sse\\.populatedb\\.PopulateDB|[s]martrun\\.sh' | head -20 || true" 2>&1
           printf 'ssh_exit=%s\n' "$?"
         } >> "$health_dir/$host.log"
       done
@@ -492,7 +588,18 @@ verify_replica_logs() {
 }
 
 fetch_results() {
-  copy_remote_file_with_retry "$(client_node)" "$REMOTE_OUTPUT_PATH" "$ABS_OUTPUT_PATH"
+  local worker_id
+
+  for (( worker_id = 0; worker_id < PHYSICAL_CLIENT_MACHINE_COUNT; worker_id++ )); do
+    copy_remote_file_with_retry \
+      "$(client_node "$worker_id")" \
+      "${REMOTE_OUTPUT_PATHS[$worker_id]}" \
+      "${LOCAL_WORKER_OUTPUT_PATHS[$worker_id]}"
+  done
+
+  "$MERGE_WORKER_SAMPLES_SCRIPT" \
+    --output "$ABS_OUTPUT_PATH" \
+    "${LOCAL_WORKER_OUTPUT_PATHS[@]}"
 }
 
 verify_results() {

@@ -171,11 +171,25 @@ fault_count_for() {
 }
 
 client_node() {
+  local client_index="${1:-0}"
+  local client_machine_count="${PHYSICAL_CLIENT_MACHINE_COUNT:-1}"
   local node_index="$REPLICA_COUNT"
   (( ORAM_REPLICA_COUNT <= node_index )) || node_index="$ORAM_REPLICA_COUNT"
+  node_index=$((node_index + client_index % client_machine_count))
   (( node_index < ${#QUINTA_NODES[@]} )) \
-    || die "one Quinta node must remain reserved for clients"
+    || die "No Quinta node is available for physical client machine $client_index"
   printf '%s%s\n' "$QUINTA_SSH_PREFIX" "${QUINTA_NODES[$node_index]}"
+}
+
+client_node_ip() {
+  local client_index="${1:-0}"
+  local client_machine_count="${PHYSICAL_CLIENT_MACHINE_COUNT:-1}"
+  local node_index="$REPLICA_COUNT"
+  (( ORAM_REPLICA_COUNT <= node_index )) || node_index="$ORAM_REPLICA_COUNT"
+  node_index=$((node_index + client_index % client_machine_count))
+  (( node_index < ${#QUINTA_NODE_IPS[@]} )) \
+    || die "No Quinta IP is available for physical client machine $client_index"
+  printf '%s\n' "${QUINTA_NODE_IPS[$node_index]}"
 }
 
 remote_run_dir() {
@@ -249,19 +263,16 @@ copy_remote_file_with_retry() {
   done
 }
 
-run_remote_job() {
+wait_remote_job() {
   local host="$1"
   local job_name="$2"
-  local command="$3"
-  local local_log="$4"
+  local local_log="$3"
   local poll_seconds="${QUINTA_REMOTE_JOB_POLL_SECONDS:-30}"
   local retry_seconds="${QUINTA_REMOTE_JOB_RETRY_SECONDS:-15}"
   local job_dir="$(remote_run_dir)/benchmark/jobs/$job_name"
   local snapshot state progress exit_code
   local last_progress=""
   local connection_lost=0
-
-  start_remote_job "$host" "$job_dir" "$command"
 
   while true; do
     if snapshot="$(ssh_remote "$host" "
@@ -328,12 +339,34 @@ run_remote_job() {
   fi
 }
 
+run_remote_job() {
+  local host="$1"
+  local job_name="$2"
+  local command="$3"
+  local local_log="$4"
+  local job_dir="$(remote_run_dir)/benchmark/jobs/$job_name"
+
+  start_remote_job "$host" "$job_dir" "$command"
+  wait_remote_job "$host" "$job_name" "$local_log"
+}
+
 deploy_arg() {
+  local client_deployments="${DEPLOY_CLIENT_COUNT:-$PHYSICAL_CLIENT_MACHINE_COUNT}"
+  local client_machines="${PHYSICAL_CLIENT_MACHINE_COUNT:-1}"
+  local coordinator_args=()
+  if [[ -n "${DEPLOY_COORDINATOR_PORT:-}" ]]; then
+    coordinator_args=(--coordinator-port "$DEPLOY_COORDINATOR_PORT")
+  fi
+
   "$DEPLOY_SCRIPT" "$1" \
     --cluster-config "$CLUSTER_CONFIG" \
     --sseReplicas "$REPLICA_COUNT" \
     --oramReplicas "${ORAM_REPLICA_COUNT:--1}" \
-    --oramMaxConcurrentClients "${ORAM_MAX_CONCURRENT_CLIENTS:-1}" \
-    --clients "$DEPLOY_CLIENT_COUNT" \
+    --oramMaxConcurrentClients "${ORAM_MAX_CONCURRENT_CLIENTS:-10}" \
+    --sseCheckpointPeriod "$BENCHMARK_SSE_CHECKPOINT_PERIOD" \
+    --oramCheckpointPeriod "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" \
+    --client-deployments "$client_deployments" \
+    --client-machines "$client_machines" \
+    "${coordinator_args[@]}" \
     --run-name "$RUN_NAME"
 }

@@ -31,6 +31,7 @@ COMMON_MANIFEST_COLUMNS = (
     "sse_replicas",
     "oram_replicas",
     "client_count",
+    "physical_client_machines",
     "synthetic_keyword_count",
     "synthetic_documents_per_keyword",
     "dataset_seed",
@@ -52,6 +53,7 @@ COMMON_CONFIG_COLUMNS = (
     "sse_replicas",
     "oram_replicas",
     "client_count",
+    "physical_client_machines",
 )
 
 DATASET_CONFIG_COLUMNS = (
@@ -185,11 +187,14 @@ def normalize_manifest_row(
         "sse_replicas",
         "oram_replicas",
         "client_count",
+        "physical_client_machines",
         "synthetic_keyword_count",
         "synthetic_documents_per_keyword",
     )
     for field in positive_fields:
         normalized[field] = str(parse_int(normalized[field], field, context, 1))
+    if int(normalized["physical_client_machines"]) > int(normalized["client_count"]):
+        raise ValueError(f"{context}: physical_client_machines cannot exceed client_count")
     for field in ("dataset_seed", "workload_seed"):
         normalized[field] = str(parse_int(normalized[field], field, context))
 

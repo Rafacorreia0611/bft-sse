@@ -11,6 +11,8 @@ COMMON_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
+BENCHMARK_SSE_CHECKPOINT_PERIOD=10000
+BENCHMARK_ORAM_CHECKPOINT_PERIOD=10000
 CURRENT_MARKER_PATH=""
 TEMP_DIR=""
 
@@ -165,6 +167,7 @@ load_config() {
   POPULATE_CLIENT_COUNT="$(get_property populateClientCount)"
   POPULATE_BATCH_SIZE="$(get_property populateBatchSize)"
   CLIENT_ID="$(get_property clientId)"
+  MAX_PHYSICAL_CLIENT_MACHINES="$(get_property maxPhysicalClientMachines)"
   WARMUP_SECONDS="$(get_property warmupSeconds)"
   MEASUREMENT_SECONDS="$(get_property measurementSeconds)"
   WARMUP_KEYWORD_COUNT="$(get_property warmupKeywordCount)"
@@ -190,6 +193,7 @@ validate_config() {
   validate_positive_integer "$POPULATE_CLIENT_COUNT" "populateClientCount"
   validate_positive_integer "$POPULATE_BATCH_SIZE" "populateBatchSize"
   validate_positive_integer "$CLIENT_ID" "clientId"
+  validate_positive_integer "$MAX_PHYSICAL_CLIENT_MACHINES" "maxPhysicalClientMachines"
   validate_positive_integer "$WARMUP_SECONDS" "warmupSeconds"
   validate_positive_integer "$MEASUREMENT_SECONDS" "measurementSeconds"
   validate_positive_integer "$WARMUP_KEYWORD_COUNT" "warmupKeywordCount"
@@ -217,10 +221,13 @@ validate_config() {
 
   # shellcheck source=/dev/null
   source "$CLUSTER_CONFIG"
-  local max_replica_count
-  max_replica_count=$((${#QUINTA_NODES[@]} - 1))
+  local required_client_machines="$MAX_PHYSICAL_CLIENT_MACHINES"
+  if (( CLIENT_COUNT < required_client_machines )); then
+    required_client_machines="$CLIENT_COUNT"
+  fi
+  local max_replica_count=$((${#QUINTA_NODES[@]} - required_client_machines))
   (( REPLICA_COUNT <= max_replica_count )) \
-    || die "replicaCount cannot exceed $max_replica_count: one Quinta node must remain reserved for clients"
+    || die "replicaCount cannot exceed $max_replica_count with $required_client_machines physical client machines"
   ORAM_REPLICA_COUNT="$REPLICA_COUNT"
   client_node >/dev/null
 
@@ -251,7 +258,7 @@ prepare_outputs() {
 
 write_manifest_header() {
   printf '%s\n' \
-    $'run_id\trepetition\tsample_csv\tmeasurement_seconds\tsse_replicas\toram_replicas\tclient_count\tsynthetic_keyword_count\tsynthetic_documents_per_keyword\tdataset_seed\tworkload_seed\tsearch_percentage\taccess_distribution\tzipfian_exponent' \
+    $'run_id\trepetition\tsample_csv\tmeasurement_seconds\tsse_replicas\toram_replicas\tclient_count\tphysical_client_machines\tsynthetic_keyword_count\tsynthetic_documents_per_keyword\tdataset_seed\tworkload_seed\tsearch_percentage\taccess_distribution\tzipfian_exponent' \
     > "$MANIFEST_PATH"
 }
 
@@ -280,6 +287,7 @@ write_resolved_config() {
     printf 'populateBatchSize=%s\n' "$POPULATE_BATCH_SIZE"
     printf 'clientId=%s\n' "$CLIENT_ID"
     printf 'clientCount=%s\n' "$CLIENT_COUNT"
+    printf 'maxPhysicalClientMachines=%s\n' "$MAX_PHYSICAL_CLIENT_MACHINES"
     printf 'scenario=concurrent-workload\n'
     printf 'warmupSeconds=%s\n' "$WARMUP_SECONDS"
     printf 'measurementSeconds=%s\n' "$MEASUREMENT_SECONDS"
@@ -339,8 +347,12 @@ append_manifest_row() {
   local search_percentage="$5"
   local distribution="$6"
   local exponent="$7"
+  local physical_client_machines="$MAX_PHYSICAL_CLIENT_MACHINES"
+  if (( CLIENT_COUNT < physical_client_machines )); then
+    physical_client_machines="$CLIENT_COUNT"
+  fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$run_id" \
     "$repetition" \
     "$sample_path" \
@@ -348,6 +360,7 @@ append_manifest_row() {
     "$REPLICA_COUNT" \
     "$REPLICA_COUNT" \
     "$CLIENT_COUNT" \
+    "$physical_client_machines" \
     "$SYNTHETIC_KEYWORD_COUNT" \
     "$SYNTHETIC_DOCUMENTS_PER_KEYWORD" \
     "$EFFECTIVE_SEED" \
@@ -381,6 +394,8 @@ run_one_benchmark() {
   if ! "$SINGLE_RUNNER" \
       --config "$RESOLVED_CONFIG_PATH" \
       --cluster-config "$CLUSTER_CONFIG" \
+      --sseCheckpointPeriod "$BENCHMARK_SSE_CHECKPOINT_PERIOD" \
+      --oramCheckpointPeriod "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" \
       2>&1 | tee -a "$SWEEP_LOG_PATH"; then
     die "Benchmark failed: $run_id"
   fi
@@ -472,6 +487,7 @@ print_plan() {
   echo "Population clients: $POPULATE_CLIENT_COUNT" | tee -a "$SWEEP_LOG_PATH"
   echo "Replicas: $REPLICA_COUNT" | tee -a "$SWEEP_LOG_PATH"
   echo "Clients: $CLIENT_COUNT" | tee -a "$SWEEP_LOG_PATH"
+  echo "Maximum physical client machines: $MAX_PHYSICAL_CLIENT_MACHINES" | tee -a "$SWEEP_LOG_PATH"
   echo "Search percentages: ${SEARCH_PERCENTAGES[*]}" | tee -a "$SWEEP_LOG_PATH"
   echo "Access distributions: ${ACCESS_DISTRIBUTIONS[*]}" | tee -a "$SWEEP_LOG_PATH"
   echo "Zipfian exponents: ${ZIPFIAN_EXPONENTS[*]:-none}" | tee -a "$SWEEP_LOG_PATH"

@@ -90,10 +90,12 @@ public final class ConcurrentWorkloadScenario implements BenchmarkScenario {
         CountDownLatch warmupStart = new CountDownLatch(1);
         CountDownLatch measurementStart = new CountDownLatch(1);
         int activePhase = BenchmarkSynchronizer.PHASE_WARMUP;
+        int synchronizationTimeoutSeconds = scenarioConfig.measurementSeconds()
+                + (int) COORDINATION_TIMEOUT_SECONDS;
 
         try (BenchmarkSynchronizer synchronizer = BenchmarkSynchronizer.open(
                 scenarioConfig,
-                (int) COORDINATION_TIMEOUT_SECONDS
+                synchronizationTimeoutSeconds
         )) {
             try {
                 createAndInitializeLocalClients(scenarioConfig, vocabularyPath, adapters, clientHandlers);

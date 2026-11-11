@@ -9,10 +9,13 @@ COMMAND=""
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
 SSE_REPLICA_COUNT=10
 ORAM_REPLICA_COUNT=-1
-ORAM_MAX_CONCURRENT_CLIENTS=1
-CLIENT_COUNT=1
+ORAM_MAX_CONCURRENT_CLIENTS=10
+CLIENT_MACHINE_COUNT=1
+CLIENT_DEPLOYMENT_COUNT=1
+COORDINATOR_PORT=""
 RUN_NAME="latest"
-BENCHMARK_CHECKPOINT_PERIOD=10000000
+BENCHMARK_SSE_CHECKPOINT_PERIOD=10000000
+BENCHMARK_ORAM_CHECKPOINT_PERIOD=10000000
 
 usage() {
   cat >&2 <<EOF
@@ -34,8 +37,12 @@ Options:
   --cluster-config PATH  Default: benchmarkSSE/config/quinta.env
   --sseReplicas N        Default: 10
   --oramReplicas N       Default: match SSE
-  --oramMaxConcurrentClients N  Default: 1
-  --clients N            Default: 1
+  --oramMaxConcurrentClients N  Default: 10
+  --sseCheckpointPeriod N  Default: 10000000
+  --oramCheckpointPeriod N Default: 10000000
+  --client-deployments N Client deployment directories. Default: 1
+  --client-machines N    Physical client machines. Default: 1
+  --coordinator-port N   Optional coordinator listener on client machine 0
   --run-name NAME        Default: latest
 EOF
 }
@@ -111,14 +118,54 @@ parse_args() {
         [[ -n "$ORAM_MAX_CONCURRENT_CLIENTS" ]] || die "Missing value for --oramMaxConcurrentClients"
         shift
         ;;
-      --clients)
-        [[ "$#" -ge 2 ]] || die "Missing value for --clients"
-        CLIENT_COUNT="$2"
+      --sseCheckpointPeriod)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --sseCheckpointPeriod"
+        BENCHMARK_SSE_CHECKPOINT_PERIOD="$2"
         shift 2
         ;;
-      --clients=*)
-        CLIENT_COUNT="${1#--clients=}"
-        [[ -n "$CLIENT_COUNT" ]] || die "Missing value for --clients"
+      --sseCheckpointPeriod=*)
+        BENCHMARK_SSE_CHECKPOINT_PERIOD="${1#--sseCheckpointPeriod=}"
+        [[ -n "$BENCHMARK_SSE_CHECKPOINT_PERIOD" ]] || die "Missing value for --sseCheckpointPeriod"
+        shift
+        ;;
+      --oramCheckpointPeriod)
+        [[ "$#" -ge 2 && "$2" != --* ]] || die "Missing value for --oramCheckpointPeriod"
+        BENCHMARK_ORAM_CHECKPOINT_PERIOD="$2"
+        shift 2
+        ;;
+      --oramCheckpointPeriod=*)
+        BENCHMARK_ORAM_CHECKPOINT_PERIOD="${1#--oramCheckpointPeriod=}"
+        [[ -n "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" ]] || die "Missing value for --oramCheckpointPeriod"
+        shift
+        ;;
+      --client-machines)
+        [[ "$#" -ge 2 ]] || die "Missing value for --client-machines"
+        CLIENT_MACHINE_COUNT="$2"
+        shift 2
+        ;;
+      --client-machines=*)
+        CLIENT_MACHINE_COUNT="${1#--client-machines=}"
+        [[ -n "$CLIENT_MACHINE_COUNT" ]] || die "Missing value for --client-machines"
+        shift
+        ;;
+      --coordinator-port)
+        [[ "$#" -ge 2 ]] || die "Missing value for --coordinator-port"
+        COORDINATOR_PORT="$2"
+        shift 2
+        ;;
+      --coordinator-port=*)
+        COORDINATOR_PORT="${1#--coordinator-port=}"
+        [[ -n "$COORDINATOR_PORT" ]] || die "Missing value for --coordinator-port"
+        shift
+        ;;
+      --client-deployments)
+        [[ "$#" -ge 2 ]] || die "Missing value for --client-deployments"
+        CLIENT_DEPLOYMENT_COUNT="$2"
+        shift 2
+        ;;
+      --client-deployments=*)
+        CLIENT_DEPLOYMENT_COUNT="${1#--client-deployments=}"
+        [[ -n "$CLIENT_DEPLOYMENT_COUNT" ]] || die "Missing value for --client-deployments"
         shift
         ;;
       --run-name)
@@ -159,27 +206,35 @@ load_cluster_config() {
   fi
   validate_positive_integer "$ORAM_REPLICA_COUNT" "oramReplicas"
   [[ "$ORAM_REPLICA_COUNT" -ge 4 ]] || die "oramReplicas must be at least 4"
-  validate_replica_capacity
   validate_positive_integer "$ORAM_MAX_CONCURRENT_CLIENTS" "oramMaxConcurrentClients"
-  validate_positive_integer "$CLIENT_COUNT" "clients"
+  validate_positive_integer "$CLIENT_MACHINE_COUNT" "client-machines"
+  validate_positive_integer "$CLIENT_DEPLOYMENT_COUNT" "client-deployments"
+  validate_positive_integer "$BENCHMARK_SSE_CHECKPOINT_PERIOD" "SSE checkpoint period"
+  validate_positive_integer "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" "ORAM checkpoint period"
+  (( CLIENT_MACHINE_COUNT <= CLIENT_DEPLOYMENT_COUNT )) \
+    || die "client-machines cannot exceed client-deployments"
+  validate_node_capacity
   validate_positive_integer "$QUINTA_BASE_CLIENT_PORT" "QUINTA_BASE_CLIENT_PORT"
   validate_positive_integer "$QUINTA_ORAM_BASE_CLIENT_PORT" "QUINTA_ORAM_BASE_CLIENT_PORT"
   validate_positive_integer "$QUINTA_PORT_STEP" "QUINTA_PORT_STEP"
   validate_positive_integer "$QUINTA_TTP_PORT" "QUINTA_TTP_PORT"
   validate_positive_integer "$QUINTA_ORAM_TTP_PORT" "QUINTA_ORAM_TTP_PORT"
+  if [[ -n "$COORDINATOR_PORT" ]]; then
+    validate_positive_integer "$COORDINATOR_PORT" "coordinator-port"
+    (( COORDINATOR_PORT <= 65535 )) || die "coordinator-port must not exceed 65535"
+  fi
   [[ "$QUINTA_PORT_STEP" -ge 3 ]] || die "QUINTA_PORT_STEP must be at least 3 for SSE/ORAM replicas"
   validate_port_ranges
   [[ "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "run-name may only contain letters, numbers, dot, underscore, and dash"
 }
 
-validate_replica_capacity() {
-  local max_replicas
-  max_replicas=$((${#QUINTA_NODES[@]} - 1))
+validate_node_capacity() {
+  local replica_nodes="$SSE_REPLICA_COUNT"
+  (( ORAM_REPLICA_COUNT <= replica_nodes )) || replica_nodes="$ORAM_REPLICA_COUNT"
+  local required_nodes=$((replica_nodes + CLIENT_MACHINE_COUNT))
 
-  (( SSE_REPLICA_COUNT <= max_replicas )) \
-    || die "sseReplicas cannot exceed $max_replicas: one Quinta node must remain reserved for clients"
-  (( ORAM_REPLICA_COUNT <= max_replicas )) \
-    || die "oramReplicas cannot exceed $max_replicas: one Quinta node must remain reserved for clients"
+  (( required_nodes <= ${#QUINTA_NODES[@]} )) || die \
+    "$replica_nodes replica nodes and $CLIENT_MACHINE_COUNT physical client machines require $required_nodes nodes, but only ${#QUINTA_NODES[@]} are configured"
 }
 
 validate_port_ranges() {
@@ -276,8 +331,10 @@ oram_replica_server_port() {
 }
 
 client_node() {
+  local client_index="${1:-0}"
   local node_index="$SSE_REPLICA_COUNT"
   (( ORAM_REPLICA_COUNT <= node_index )) || node_index="$ORAM_REPLICA_COUNT"
+  node_index=$((node_index + client_index))
   printf '%s\n' "${QUINTA_NODES[$node_index]}"
 }
 
@@ -308,7 +365,10 @@ print_layout() {
   echo "SSE replicas: $SSE_REPLICA_COUNT (f=$(fault_count))"
   echo "ORAM replicas: $ORAM_REPLICA_COUNT"
   echo "ORAM max concurrent clients: $ORAM_MAX_CONCURRENT_CLIENTS"
-  echo "Clients: $CLIENT_COUNT"
+  echo "SSE checkpoint period: $BENCHMARK_SSE_CHECKPOINT_PERIOD"
+  echo "ORAM checkpoint period: $BENCHMARK_ORAM_CHECKPOINT_PERIOD"
+  echo "Physical client machines: $CLIENT_MACHINE_COUNT"
+  echo "Client deployments: $CLIENT_DEPLOYMENT_COUNT"
   echo "Remote root: $(remote_run_dir)"
   echo "Ports shown below are client/server; COBRA also uses server port + 1."
   echo
@@ -326,21 +386,22 @@ print_layout() {
       "$(oram_replica_client_port "$replica_id")" "$(oram_replica_server_port "$replica_id")"
   done
   echo
-  echo "Clients:"
-  for (( client_index = 0; client_index < CLIENT_COUNT; client_index++ )); do
-    printf '  cli%-3s -> %s\n' "$client_index" "$(client_node "$client_index")"
+  echo "Client machines:"
+  for (( client_index = 0; client_index < CLIENT_DEPLOYMENT_COUNT; client_index++ )); do
+    printf '  cli%-3s -> %s\n' "$client_index" "$(client_node "$((client_index % CLIENT_MACHINE_COUNT))")"
   done
 }
 
 write_system_config() {
   local path="$1"
   local replica_count="$2"
+  local checkpoint_period="$3"
   local tmp_path="${path}.tmp"
   awk \
     -v replica_count="$replica_count" \
     -v fault_count_value="$(fault_count "$replica_count")" \
     -v initial_view_value="$(initial_view "$replica_count")" \
-    -v checkpoint_period="$BENCHMARK_CHECKPOINT_PERIOD" \
+    -v checkpoint_period="$checkpoint_period" \
     '
       /^system\.servers\.num[[:space:]]*=/ {
         print "system.servers.num = " replica_count
@@ -363,7 +424,7 @@ write_system_config() {
   mv "$tmp_path" "$path"
 
   grep -qx \
-    "system.totalordermulticast.checkpoint_period = $BENCHMARK_CHECKPOINT_PERIOD" \
+    "system.totalordermulticast.checkpoint_period = $checkpoint_period" \
     "$path" || die "Failed to configure checkpoint period in $path"
 }
 
@@ -394,7 +455,7 @@ configure_local_deploy() {
     deploy_dir="$ROOT_DIR/build/local/rep${deploy_index}"
     [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
     repair_local_deploy_from_reference "$deploy_dir" "$ROOT_DIR/config"
-    write_system_config "$deploy_dir/config/system.config" "$SSE_REPLICA_COUNT"
+    write_system_config "$deploy_dir/config/system.config" "$SSE_REPLICA_COUNT" "$BENCHMARK_SSE_CHECKPOINT_PERIOD"
     write_hosts_config "$deploy_dir/config/hosts.config" "$SSE_REPLICA_COUNT" "$QUINTA_BASE_CLIENT_PORT" "$QUINTA_TTP_PORT"
   done
 
@@ -402,19 +463,19 @@ configure_local_deploy() {
     deploy_dir="$ROOT_DIR/build/local/oramRep${deploy_index}"
     [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
     repair_local_deploy_from_reference "$deploy_dir" "$ROOT_DIR/oram_config"
-    write_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT"
+    write_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT" "$BENCHMARK_ORAM_CHECKPOINT_PERIOD"
     write_hosts_config "$deploy_dir/config/hosts.config" "$ORAM_REPLICA_COUNT" "$QUINTA_ORAM_BASE_CLIENT_PORT" "$QUINTA_ORAM_TTP_PORT"
   done
 
-  for (( deploy_index = 0; deploy_index < CLIENT_COUNT; deploy_index++ )); do
+  for (( deploy_index = 0; deploy_index < CLIENT_DEPLOYMENT_COUNT; deploy_index++ )); do
     deploy_dir="$ROOT_DIR/build/local/cli${deploy_index}"
     [[ -d "$deploy_dir" ]] || die "Missing local deploy directory: $deploy_dir"
     repair_local_deploy_from_reference "$deploy_dir" "$ROOT_DIR/oram_config"
     mkdir -p "$deploy_dir/sse_config"
     cp -R "$ROOT_DIR/config/." "$deploy_dir/sse_config/"
-    write_system_config "$deploy_dir/sse_config/system.config" "$SSE_REPLICA_COUNT"
+    write_system_config "$deploy_dir/sse_config/system.config" "$SSE_REPLICA_COUNT" "$BENCHMARK_SSE_CHECKPOINT_PERIOD"
     write_hosts_config "$deploy_dir/sse_config/hosts.config" "$SSE_REPLICA_COUNT" "$QUINTA_BASE_CLIENT_PORT" "$QUINTA_TTP_PORT"
-    write_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT"
+    write_system_config "$deploy_dir/config/system.config" "$ORAM_REPLICA_COUNT" "$BENCHMARK_ORAM_CHECKPOINT_PERIOD"
     write_hosts_config "$deploy_dir/config/hosts.config" "$ORAM_REPLICA_COUNT" "$QUINTA_ORAM_BASE_CLIENT_PORT" "$QUINTA_ORAM_TTP_PORT"
   done
 }
@@ -632,7 +693,7 @@ validate_local_deploy() {
   for (( deploy_index = 0; deploy_index < ORAM_REPLICA_COUNT; deploy_index++ )); do
     validate_one_local_deploy "$ROOT_DIR/build/local/oramRep${deploy_index}" "$expected_source_jars" "$ROOT_DIR/oram_config"
   done
-  for (( deploy_index = 0; deploy_index < CLIENT_COUNT; deploy_index++ )); do
+  for (( deploy_index = 0; deploy_index < CLIENT_DEPLOYMENT_COUNT; deploy_index++ )); do
     validate_one_local_deploy "$ROOT_DIR/build/local/cli${deploy_index}" "$expected_source_jars" "$ROOT_DIR/oram_config"
     validate_config_copy "$ROOT_DIR/build/local/cli${deploy_index}/sse_config" "$ROOT_DIR/config"
     [[ -s "$ROOT_DIR/build/local/cli${deploy_index}/datasets/vocabulary/vocabulary.txt" ]] \
@@ -644,7 +705,7 @@ prepare_local_deploy() {
   echo "Preparing local deploy..."
   (
     cd "$ROOT_DIR"
-    ./gradlew --no-daemon --no-watch-fs clean localDeploy -Pservers="$SSE_REPLICA_COUNT" -PoramServers="$ORAM_REPLICA_COUNT" -Pclients="$CLIENT_COUNT"
+    ./gradlew --no-daemon --no-watch-fs clean localDeploy -Pservers="$SSE_REPLICA_COUNT" -PoramServers="$ORAM_REPLICA_COUNT" -Pclients="$CLIENT_DEPLOYMENT_COUNT"
   )
   configure_local_deploy
   validate_local_deploy
@@ -685,8 +746,8 @@ deploy() {
   done
 
   echo "Copying clients..."
-  for (( client_index = 0; client_index < CLIENT_COUNT; client_index++ )); do
-    node="$(client_node "$client_index")"
+  for (( client_index = 0; client_index < CLIENT_DEPLOYMENT_COUNT; client_index++ )); do
+    node="$(client_node "$((client_index % CLIENT_MACHINE_COUNT))")"
     host="$(ssh_host "$node")"
     remote_dir="$(remote_run_dir)"
     echo "  cli$client_index -> $host"
@@ -847,6 +908,9 @@ run_ports_for_node() {
       ports+=" $client_port $((client_port + 1)) $((client_port + 2))"
     fi
   done
+  if [[ -n "$COORDINATOR_PORT" && "$(client_node 0)" == "$node" ]]; then
+    ports+=" $COORDINATOR_PORT"
+  fi
   printf '%s\n' "$ports"
 }
 
