@@ -427,13 +427,12 @@ verify_results() {
   (( actual_rows == expected_rows )) || die "Expected $expected_rows search measurements, found $actual_rows in $ABS_OUTPUT_PATH"
 }
 
-summarize_and_plot() {
+summarize_results() {
   python3 "$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/summarize.py" --input "$ABS_OUTPUT_PATH" --output "$ABS_SUMMARY_PATH"
-  gnuplot -e "input_path='$ABS_SUMMARY_PATH'; mean_output_path='$ABS_MEAN_PLOT_PATH'; median_output_path='$ABS_MEDIAN_PLOT_PATH'" \
-    "$ROOT_DIR/benchmarkSSE/gnuplot/search/latency_by_docs/mean_median.gp"
+  # Automatic gnuplot generation disabled; plot selected TSVs manually.
 }
 
-verify_summary_and_plots() {
+verify_summary() {
   local bucket_count expected_rows actual_rows
 
   [[ -s "$ABS_SUMMARY_PATH" ]] || die "Summary TSV not found or empty: $ABS_SUMMARY_PATH"
@@ -442,8 +441,7 @@ verify_summary_and_plots() {
   actual_rows=$(( $(wc -l < "$ABS_SUMMARY_PATH") - 1 ))
   (( actual_rows == expected_rows )) || die "Expected $expected_rows metric summary rows, found $actual_rows in $ABS_SUMMARY_PATH"
 
-  [[ -s "$ABS_MEAN_PLOT_PATH" ]] || die "Mean plot not found or empty: $ABS_MEAN_PLOT_PATH"
-  [[ -s "$ABS_MEDIAN_PLOT_PATH" ]] || die "Median plot not found or empty: $ABS_MEDIAN_PLOT_PATH"
+  # Plot verification disabled; PDFs are generated manually.
 }
 
 cleanup() {
@@ -491,14 +489,12 @@ main() {
   verify_replica_logs
   fetch_results
   verify_results
-  summarize_and_plot
-  verify_summary_and_plots
+  summarize_results
+  verify_summary
   BENCHMARK_COMPLETED=1
 
   echo "Benchmark CSV: $ABS_OUTPUT_PATH"
   echo "Summary TSV: $ABS_SUMMARY_PATH"
-  echo "Mean plot: $ABS_MEAN_PLOT_PATH"
-  echo "Median plot: $ABS_MEDIAN_PLOT_PATH"
 }
 
 main "$@"

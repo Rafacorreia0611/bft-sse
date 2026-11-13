@@ -16,7 +16,7 @@ ORAM_REPLICAS_OVERRIDE=""
 
 DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/run_quinta.sh"
 AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/aggregate_replicas.py"
-GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/update/latency_by_docs/by_replicas.gp"
+# Plotting is manual; the benchmark sweep only produces TSV results.
 
 usage() {
   cat >&2 <<EOF
@@ -230,17 +230,10 @@ aggregate_results() {
     2>&1 | tee -a "$SWEEP_LOG_PATH"
 }
 
-generate_plot() {
-  local doc_count_values="${VALIDATED_DOC_COUNTS[*]}"
-
-  echo "Generating Quinta update replica sweep plot..." | tee -a "$SWEEP_LOG_PATH"
-  gnuplot \
-    -e "input_path='$SWEEP_SUMMARY_PATH'; output_dir='$SWEEP_PLOTS_DIR'; doc_count_values='$doc_count_values'" \
-    "$GNUPLOT_SCRIPT" 2>&1 | tee -a "$SWEEP_LOG_PATH"
-}
+# Automatic plotting disabled. Use a gnuplot script manually on a selected TSV.
 
 verify_outputs() {
-  local expected_rows actual_rows plot_path
+  local expected_rows actual_rows
 
   [[ -s "$SWEEP_SUMMARY_PATH" ]] \
     || die "Aggregated update summary is missing or empty: $SWEEP_SUMMARY_PATH"
@@ -250,8 +243,7 @@ verify_outputs() {
   (( actual_rows == expected_rows )) \
     || die "Expected $expected_rows aggregate metric rows, found $actual_rows in $SWEEP_SUMMARY_PATH"
 
-  plot_path="$SWEEP_PLOTS_DIR/update_latency_by_replicas.pdf"
-  [[ -s "$plot_path" ]] || die "Update replica plot is missing or empty: $plot_path"
+  # Plot verification disabled; PDFs are generated manually.
 }
 
 main() {
@@ -261,12 +253,10 @@ main() {
   validate_oram_replicas
   ensure_executable_exists "$DOCS_RUNNER"
   ensure_file_exists "$AGGREGATE_SCRIPT"
-  ensure_file_exists "$GNUPLOT_SCRIPT"
   ensure_file_exists "$CONFIG_PATH"
   ensure_file_exists "$CLUSTER_CONFIG"
   validate_sweep_capacity
   ensure_command_exists python3
-  ensure_command_exists gnuplot
 
   VALIDATED_DOC_COUNTS=()
   SUMMARY_PATHS=()
@@ -289,11 +279,10 @@ main() {
   done
 
   aggregate_results
-  generate_plot
+  # generate_plot  # Plot selected results manually.
   verify_outputs
 
   echo "Quinta update replica sweep summary written to $SWEEP_SUMMARY_PATH"
-  echo "Quinta update replica sweep plot written to $SWEEP_PLOTS_DIR/update_latency_by_replicas.pdf"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

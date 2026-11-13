@@ -12,7 +12,7 @@ ORAM_REPLICAS_OVERRIDE=""
 
 DOCS_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/run_local.sh"
 AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/aggregate_replicas.py"
-GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/latency_by_docs/by_replicas.gp"
+# Plotting is manual; the benchmark sweep only produces TSV results.
 
 usage() {
   cat >&2 <<EOF
@@ -310,12 +310,7 @@ aggregate_results() {
   python3 "$AGGREGATE_SCRIPT" --output "$SWEEP_SUMMARY_PATH" "${SUMMARY_PATHS[@]}" 2>&1 | tee -a "$SWEEP_LOG_PATH"
 }
 
-generate_plots() {
-  echo "Generating replica sweep plots..." | tee -a "$SWEEP_LOG_PATH"
-  gnuplot \
-    -e "input_path='$SWEEP_SUMMARY_PATH'; output_dir='$SWEEP_PLOTS_DIR'; bucket_specs='$BUCKET_SPECS'; bucket_labels='$BUCKET_LABELS'" \
-    "$GNUPLOT_SCRIPT" 2>&1 | tee -a "$SWEEP_LOG_PATH"
-}
+# Automatic plotting disabled. Use a gnuplot script manually on a selected TSV.
 
 verify_outputs() {
   local expected_rows actual_rows
@@ -332,10 +327,7 @@ verify_outputs() {
     exit 1
   fi
 
-  if [[ ! -s "$SWEEP_PLOTS_DIR/search_latency_by_replicas.pdf" ]]; then
-    echo "Plot is missing or empty: $SWEEP_PLOTS_DIR/search_latency_by_replicas.pdf" >&2
-    exit 1
-  fi
+# Plot verification disabled; PDFs are generated manually.
 }
 
 main() {
@@ -344,10 +336,8 @@ main() {
   validate_oram_replicas
   ensure_file_exists "$DOCS_RUNNER"
   ensure_file_exists "$AGGREGATE_SCRIPT"
-  ensure_file_exists "$GNUPLOT_SCRIPT"
   ensure_file_exists "$CONFIG_PATH"
   ensure_command_exists python3
-  ensure_command_exists gnuplot
   load_bucket_config
   load_summary_location
 
@@ -369,11 +359,10 @@ main() {
   done
 
   aggregate_results
-  generate_plots
+  # generate_plots  # Plot selected results manually.
   verify_outputs
 
   echo "Replica sweep summary written to $SWEEP_SUMMARY_PATH"
-  echo "Replica sweep plot written to $SWEEP_PLOTS_DIR/search_latency_by_replicas.pdf"
 }
 
 main "$@"

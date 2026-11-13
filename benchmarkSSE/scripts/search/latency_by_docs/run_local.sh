@@ -304,7 +304,7 @@ load_config() {
   BASE_SUMMARY_PATH="$(resolve_config_path "$SUMMARY_OUTPUT_PATH")"
   BASE_MEAN_PLOT_PATH="$(resolve_config_path "$MEAN_PLOT_OUTPUT_PATH")"
   BASE_MEDIAN_PLOT_PATH="$(resolve_config_path "$MEDIAN_PLOT_OUTPUT_PATH")"
-  ABS_GNUPLOT_SCRIPT="$ROOT_DIR/benchmarkSSE/gnuplot/search/latency_by_docs/mean_median.gp"
+  # Plotting is manual; no gnuplot script is needed during a benchmark run.
   ABS_SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/search/latency_by_docs/summarize.py"
   ABS_SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/synthetic_dataset.py"
 
@@ -1054,27 +1054,7 @@ verify_summary() {
   echo "Summary written to $ABS_SUMMARY_PATH ($actual_rows metric rows)."
 }
 
-generate_plots() {
-  ensure_command_exists gnuplot
-  ensure_non_empty_file "$ABS_SUMMARY_PATH"
-  ensure_file_exists "$ABS_GNUPLOT_SCRIPT"
-
-  echo "Generating plots..."
-  (
-    cd "$ROOT_DIR"
-    gnuplot \
-      -e "input_path='$ABS_SUMMARY_PATH'; mean_output_path='$ABS_MEAN_PLOT_PATH'; median_output_path='$ABS_MEDIAN_PLOT_PATH'" \
-      "$ABS_GNUPLOT_SCRIPT"
-  )
-}
-
-verify_plots() {
-  ensure_non_empty_file "$ABS_MEAN_PLOT_PATH"
-  ensure_non_empty_file "$ABS_MEDIAN_PLOT_PATH"
-
-  echo "Mean plot written to $ABS_MEAN_PLOT_PATH."
-  echo "Median plot written to $ABS_MEDIAN_PLOT_PATH."
-}
+# Automatic plot generation and verification are disabled. Plot selected TSVs manually.
 
 main() {
   parse_args "$@"
@@ -1093,8 +1073,7 @@ main() {
   verify_results
   summarize_results
   verify_summary
-  generate_plots
-  verify_plots
+  # generate_plots and verify_plots  # Plot selected results manually.
 }
 
 main "$@"
