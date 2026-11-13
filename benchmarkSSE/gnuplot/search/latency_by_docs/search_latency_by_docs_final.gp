@@ -15,7 +15,7 @@ set output output_path
 set border lw 1.1 lc rgb "#30343b"
 set tics in scale 0.9,0.45 font "Helvetica,13" textcolor rgb "#30343b"
 set grid xtics ytics back lc rgb "#65717f" lw 1.1 dt 3
-set xlabel "#Replicas" font "Helvetica,14" offset 0,0.3
+set xlabel "#Servers" font "Helvetica,14" offset 0,0.3
 set ylabel "Latency (ms)" font "Helvetica,14" offset -0.4,0
 # Tiny edge padding keeps markers and SD caps at 4 and 10 fully visible.
 set xrange [3.94:10.06]
