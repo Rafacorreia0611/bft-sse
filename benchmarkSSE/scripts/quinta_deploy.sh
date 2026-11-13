@@ -708,18 +708,22 @@ copy_local_deploy_dir() {
   local local_dir="$1"
   local host="$2"
   local remote_dir="$3"
-  local deploy_name remote_target
+  local deploy_name remote_target attempt
 
   deploy_name="$(basename "$local_dir")"
   remote_target="$remote_dir/$deploy_name"
 
-  rsync_remote "$local_dir/" "$host:$remote_target/"
-  if ! validate_remote_deploy "$local_dir" "$host" "$remote_target"; then
-    echo "  remote deploy incomplete after rsync; retrying $deploy_name on $host..."
-    rsync_remote "$local_dir/" "$host:$remote_target/"
-    validate_remote_deploy "$local_dir" "$host" "$remote_target" \
-      || die "Remote deploy is incomplete after retry: $host:$remote_target"
-  fi
+  for attempt in 1 2 3; do
+    if rsync_remote "$local_dir/" "$host:$remote_target/" \
+        && validate_remote_deploy "$local_dir" "$host" "$remote_target"; then
+      return 0
+    fi
+    if (( attempt < 3 )); then
+      echo "  copy or verification failed for $deploy_name on $host; retrying..."
+      sleep 5
+    fi
+  done
+  die "Could not copy and verify $deploy_name on $host after 3 attempts"
 }
 
 validate_local_deploy() {
