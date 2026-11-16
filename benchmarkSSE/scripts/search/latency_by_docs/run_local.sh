@@ -280,6 +280,7 @@ load_config() {
   DEPLOY_CLIENT_COUNT="$(get_property deployClientCount)"
   POPULATE_CLIENT_DIR="$(get_property populateClientDir)"
   POPULATE_CLIENT_ID="$(get_property populateClientId)"
+  POPULATE_CLIENT_COUNT="$(get_property populateClientCount)"
   POPULATE_BATCH_SIZE="$(get_property populateBatchSize)"
   BENCHMARK_CLIENT_DIR="$(get_property benchmarkClientDir)"
 
@@ -326,7 +327,15 @@ load_config() {
   calculate_fault_count
   validate_positive_integer "$DEPLOY_CLIENT_COUNT" "deployClientCount"
   validate_positive_integer "$POPULATE_CLIENT_ID" "populateClientId"
+  validate_positive_integer "$POPULATE_CLIENT_COUNT" "populateClientCount"
   validate_positive_integer "$POPULATE_BATCH_SIZE" "populateBatchSize"
+  validate_positive_integer "$CLIENT_ID" "clientId"
+  (( POPULATE_CLIENT_ID + POPULATE_CLIENT_COUNT - 1 <= 2147482647 )) \
+    || die "Population client IDs exceed the supported ORAM client ID range"
+  (( CLIENT_ID <= 2147482647 )) || die "Benchmark client ID exceeds the supported ORAM client ID range"
+  if (( CLIENT_ID >= POPULATE_CLIENT_ID && CLIENT_ID < POPULATE_CLIENT_ID + POPULATE_CLIENT_COUNT )); then
+    die "Population and benchmark client IDs overlap"
+  fi
   validate_client_dir "$POPULATE_CLIENT_DIR" "populateClientDir"
   validate_client_dir "$BENCHMARK_CLIENT_DIR" "benchmarkClientDir"
   validate_boolean "$TIMESTAMP_OUTPUTS" "timestampOutputs"
@@ -978,6 +987,7 @@ run_populate() {
     cd "$ROOT_DIR/build/local/$POPULATE_CLIENT_DIR"
     exec bash smartrun.sh sse.populatedb.PopulateDB \
       --client-id "$POPULATE_CLIENT_ID" \
+      --client-count "$POPULATE_CLIENT_COUNT" \
       --input "$ABS_DATASET_PATH" \
       --batch-size "$POPULATE_BATCH_SIZE" \
       --vocabulary "$ABS_VOCABULARY_PATH"
@@ -990,6 +1000,10 @@ run_populate() {
     tail -n 40 "$ABS_LOG_DIR/populate.log" >&2 || true
     exit 1
   fi
+  local processed_clients
+  processed_clients="$(sed -n 's/^Population clients: //p' "$ABS_LOG_DIR/populate.log" | tail -n 1)"
+  [[ "$processed_clients" == "$POPULATE_CLIENT_COUNT" ]] \
+    || die "PopulateDB used $processed_clients clients, expected $POPULATE_CLIENT_COUNT"
 }
 
 wait_for_active_client() {

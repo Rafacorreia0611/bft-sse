@@ -401,7 +401,7 @@ deploy_arg() {
     --oramCheckpointPeriod "$BENCHMARK_ORAM_CHECKPOINT_PERIOD" \
     --client-deployments "$client_deployments" \
     --client-machines "$client_machines" \
-    "${coordinator_args[@]}" \
+    ${coordinator_args[@]+"${coordinator_args[@]}"} \
     --run-name "$RUN_NAME"
 }
 

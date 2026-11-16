@@ -143,6 +143,7 @@ load_config() {
   DEPLOY_CLIENT_COUNT="$(get_property deployClientCount)"
   POPULATE_CLIENT_DIR="$(get_property populateClientDir)"
   POPULATE_CLIENT_ID="$(get_property populateClientId)"
+  POPULATE_CLIENT_COUNT="$(get_property populateClientCount)"
   POPULATE_BATCH_SIZE="$(get_property populateBatchSize)"
   BENCHMARK_CLIENT_DIR="$(get_property benchmarkClientDir)"
   CLIENT_ID="$(get_property clientId)"
@@ -193,8 +194,15 @@ validate_config() {
   validate_positive_integer "$ORAM_MAX_CONCURRENT_CLIENTS" "oramMaxConcurrentClients"
   validate_positive_integer "$DEPLOY_CLIENT_COUNT" "deployClientCount"
   validate_positive_integer "$POPULATE_CLIENT_ID" "populateClientId"
+  validate_positive_integer "$POPULATE_CLIENT_COUNT" "populateClientCount"
   validate_positive_integer "$POPULATE_BATCH_SIZE" "populateBatchSize"
   validate_positive_integer "$CLIENT_ID" "clientId"
+  (( POPULATE_CLIENT_ID + POPULATE_CLIENT_COUNT - 1 <= 2147482647 )) \
+    || die "Population client IDs exceed the supported ORAM client ID range"
+  (( CLIENT_ID <= 2147482647 )) || die "Benchmark client ID exceeds the supported ORAM client ID range"
+  if (( CLIENT_ID >= POPULATE_CLIENT_ID && CLIENT_ID < POPULATE_CLIENT_ID + POPULATE_CLIENT_COUNT )); then
+    die "Population and benchmark client IDs overlap"
+  fi
   validate_boolean "$TIMESTAMP_OUTPUTS" "timestampOutputs"
   validate_client_dir "$POPULATE_CLIENT_DIR" "populateClientDir"
   validate_client_dir "$BENCHMARK_CLIENT_DIR" "benchmarkClientDir"
@@ -403,14 +411,15 @@ copy_benchmark_inputs() {
 }
 
 run_populate_remote() {
-  local host processed_doc_ids processed_keywords remote_command
+  local host processed_clients processed_doc_ids processed_keywords remote_command
   host="$(client_node "$POPULATE_CLIENT_INDEX")"
   printf -v remote_command \
-    'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q --client-id %q --input %q --batch-size %q --vocabulary %q' \
+    'cd %q && env JAVA_OPTS=%q bash smartrun.sh %q --client-id %q --client-count %q --input %q --batch-size %q --vocabulary %q' \
     "$(remote_run_dir)/$POPULATE_CLIENT_DIR" \
     "$QUINTA_CLIENT_JAVA_OPTS" \
     "sse.populatedb.PopulateDB" \
     "$POPULATE_CLIENT_ID" \
+    "$POPULATE_CLIENT_COUNT" \
     "$REMOTE_POPULATION_PATH" \
     "$POPULATE_BATCH_SIZE" \
     "$POPULATE_REMOTE_VOCABULARY_PATH"
@@ -424,10 +433,13 @@ run_populate_remote() {
 
   processed_keywords="$(sed -n 's/^Processed keywords: //p' "$ABS_LOG_DIR/populate.log" | tail -n 1)"
   processed_doc_ids="$(sed -n 's/^Processed doc IDs: //p' "$ABS_LOG_DIR/populate.log" | tail -n 1)"
+  processed_clients="$(sed -n 's/^Population clients: //p' "$ABS_LOG_DIR/populate.log" | tail -n 1)"
   [[ "$processed_keywords" == "$EXPECTED_POPULATION_KEYWORDS" ]] \
     || die "PopulateDB processed $processed_keywords keywords, expected $EXPECTED_POPULATION_KEYWORDS"
   [[ "$processed_doc_ids" == "$INITIAL_DB_SIZE" ]] \
     || die "PopulateDB processed $processed_doc_ids document IDs, expected $INITIAL_DB_SIZE"
+  [[ "$processed_clients" == "$POPULATE_CLIENT_COUNT" ]] \
+    || die "PopulateDB used $processed_clients clients, expected $POPULATE_CLIENT_COUNT"
   echo "PopulateDB finished and validated successfully."
 }
 
