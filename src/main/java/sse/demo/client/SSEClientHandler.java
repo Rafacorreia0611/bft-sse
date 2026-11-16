@@ -12,7 +12,6 @@ import sse.domain.update.KeywordUpdate;
 import sse.domain.update.PreparedUpdateRequest;
 import sse.domain.search.SearchToken;
 import sse.domain.state.KeywordBlock;
-import sse.domain.state.State;
 import sse.facade.SSEClientFacade;
 import sse.metrics.SearchOperationMetrics;
 import sse.metrics.UpdateOperationMetrics;
@@ -58,7 +57,12 @@ public final class SSEClientHandler {
     }
 
     public void initializeState() {
+        if (sseClientFacade.isSessionInitialized()) {
+            return;
+        }
         initCoordinator.initializeOrConnect();
+        ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
+        sseClientFacade.initializeSession(stateRequest.masterKey(), stateRequest.state());
     }
 
     public List<String> search(String keyword) {
@@ -83,15 +87,7 @@ public final class SSEClientHandler {
         }
 
         phaseStart = startTiming(metrics);
-        ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
-        State state = stateRequest.state();
-        SecretKey masterKey = stateRequest.masterKey();
-        if (metrics != null) {
-            metrics.recordStateRequestLatency(System.nanoTime() - phaseStart);
-        }
-
-        phaseStart = startTiming(metrics);
-        Integer keywordLocation = sseClientFacade.resolveKeywordLocation(masterKey, state, normalizedKeyword);
+        Integer keywordLocation = sseClientFacade.resolveKeywordLocation(normalizedKeyword);
         if (metrics != null) {
             metrics.recordAddressResolutionLatency(System.nanoTime() - phaseStart);
         }
@@ -109,7 +105,6 @@ public final class SSEClientHandler {
 
         phaseStart = startTiming(metrics);
         SearchToken searchToken = sseClientFacade.generateSearchToken(
-                masterKey,
                 keywordBlock.keywordState(),
                 normalizedKeyword
         );
@@ -164,15 +159,7 @@ public final class SSEClientHandler {
         }
 
         phaseStart = startTiming(metrics);
-        ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
-        State state = stateRequest.state();
-        SecretKey masterKey = stateRequest.masterKey();
-        if (metrics != null) {
-            metrics.recordStateRequestLatency(System.nanoTime() - phaseStart);
-        }
-
-        phaseStart = startTiming(metrics);
-        Integer keywordLocation = sseClientFacade.resolveKeywordLocation(masterKey, state, normalizedKeyword);
+        Integer keywordLocation = sseClientFacade.resolveKeywordLocation(normalizedKeyword);
         if (metrics != null) {
             metrics.recordAddressResolutionLatency(System.nanoTime() - phaseStart);
         }
@@ -207,7 +194,6 @@ public final class SSEClientHandler {
         try {
             phaseStart = startTiming(metrics);
             PreparedUpdateRequest preparedUpdateRequest = sseClientFacade.prepareUpdateRequest(
-                    masterKey,
                     oldBlock.keywordState(),
                     canonicalUpdate
             );

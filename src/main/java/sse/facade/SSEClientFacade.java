@@ -30,6 +30,8 @@ public final class SSEClientFacade {
     private final SearchTokenService searchTokenService;
     private final UpdateTokenService updateTokenService;
     private final KeywordLocationService keywordLocationService;
+    private SecretKey masterKey;
+    private KeywordLocationMap keywordLocationMap;
 
     public SSEClientFacade() {
         this.searchTokenService = new SearchTokenService();
@@ -57,7 +59,21 @@ public final class SSEClientFacade {
         );
     }
 
-    public SearchToken generateSearchToken(SecretKey masterKey, KeywordState keywordState, String keyword) {
+    public void initializeSession(SecretKey masterKey, State state) {
+        if (isSessionInitialized()) {
+            throw new IllegalStateException("Client session is already initialized");
+        }
+        KeywordLocationMap locationMap = keywordLocationService.decryptLocationMap(masterKey, state);
+        this.keywordLocationMap = locationMap;
+        this.masterKey = masterKey;
+    }
+
+    public boolean isSessionInitialized() {
+        return masterKey != null && keywordLocationMap != null;
+    }
+
+    public SearchToken generateSearchToken(KeywordState keywordState, String keyword) {
+        requireSession();
         return searchTokenService.generateSearchToken(masterKey, keywordState, keyword);
     }
 
@@ -65,12 +81,13 @@ public final class SSEClientFacade {
         return keywordLocationService.normalizeKeyword(rawKeyword);
     }
 
-    public Integer resolveKeywordLocation(SecretKey masterKey, State state, String normalizedKeyword) {
-        return keywordLocationService.resolveLocation(masterKey, state, normalizedKeyword);
+    public Integer resolveKeywordLocation(String normalizedKeyword) {
+        requireSession();
+        return keywordLocationService.resolveLocation(keywordLocationMap, normalizedKeyword);
     }
 
-    public PreparedUpdateRequest prepareUpdateRequest(SecretKey masterKey, KeywordState keywordState,
-                                                      KeywordUpdate update) {
+    public PreparedUpdateRequest prepareUpdateRequest(KeywordState keywordState, KeywordUpdate update) {
+        requireSession();
         return updateTokenService.prepareUpdateRequest(
                 masterKey,
                 keywordState,
@@ -80,6 +97,12 @@ public final class SSEClientFacade {
 
     public List<String> extractAddedDocIds(Map<EncryptedUpdateTuple, SecretKey> updates) {
         return searchTokenService.extractAddedDocIds(updates);
+    }
+
+    private void requireSession() {
+        if (!isSessionInitialized()) {
+            throw new IllegalStateException("Client session is not initialized");
+        }
     }
 
     private SecretKey generateMasterKey() {

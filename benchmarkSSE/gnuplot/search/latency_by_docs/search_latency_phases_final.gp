@@ -1,10 +1,12 @@
-# Run manually from the repository root:
-#   gnuplot benchmarkSSE/gnuplot/search/latency_by_docs/search_latency_phases_final.gp
+# Run from the repository root:
+#   gnuplot -e "input_path='path/to/search_by_docs_final.tsv'" \
+#     benchmarkSSE/gnuplot/search/latency_by_docs/search_latency_phases_final.gp
 # Four linear panels keep small and large result sizes readable without
 # distorting the proportions of stacked phases.
 
 if (!exists("input_path")) {
-    input_path = "benchmarkSSE/results/latency_final_2026_11_12/search_by_docs_final.tsv"
+    print "Set input_path to a search latency summary."
+    exit
 }
 if (!exists("output_path")) {
     output_path = "benchmarkSSE/plots/final_latency/search_latency_phases.pdf"
@@ -12,7 +14,7 @@ if (!exists("output_path")) {
 
 # Pivot the long-form TSV in memory: server, docs, then four cumulative
 # phase heights. No intermediate file is written.
-phase_rows = sprintf("< awk -v OFMT='%%.9f' -F '\\t' 'NR>1 { k=$1 SUBSEP $3; if ($4==\"total_latency\") { order[++n]=k; rep[k]=$1; docs[k]=$3 }; v[k,$4]=$6 } END { for (i=1;i<=n;i++) { k=order[i]; d=docs[k]; s=v[k,\"normalization_latency\"]+v[k,\"state_request_latency\"]+v[k,\"address_resolution_latency\"]; o=s+v[k,\"oram_read_latency\"]; q=o+v[k,\"token_build_latency\"]+v[k,\"search_request_round_trip_latency\"]; p=q+v[k,\"result_processing_latency\"]; print rep[k],d,s,o,q,p } }' '%s'", input_path)
+phase_rows = sprintf("< awk -v OFMT='%%.9f' -F '\\t' 'NR>1 { k=$1 SUBSEP $3; if ($4==\"total_latency\") { order[++n]=k; rep[k]=$1; docs[k]=$3 }; v[k,$4]=$6 } END { for (i=1;i<=n;i++) { k=order[i]; d=docs[k]; s=v[k,\"normalization_latency\"]+v[k,\"address_resolution_latency\"]; o=s+v[k,\"oram_read_latency\"]; q=o+v[k,\"token_build_latency\"]+v[k,\"search_request_round_trip_latency\"]; p=q+v[k,\"result_processing_latency\"]; print rep[k],d,s,o,q,p } }' '%s'", input_path)
 
 set terminal pdfcairo enhanced color size 8.5in,6.3in font "Helvetica,11"
 set output output_path
@@ -38,7 +40,7 @@ unset key
 # A single page-wide legend with larger pattern samples and labels.
 set object 101 rectangle from screen 0.115,0.935 to screen 0.160,0.955 \
     fc rgb "#4E79A7" fs pattern 1 border lc rgb "#46515d" front
-set label 101 "Search Setup" at screen 0.170,0.945 left \
+set label 101 "Keyword Lookup" at screen 0.170,0.945 left \
     font "Helvetica,13" textcolor rgb "#30343b" front
 set object 102 rectangle from screen 0.335,0.935 to screen 0.380,0.955 \
     fc rgb "#59A14F" fs pattern 4 border lc rgb "#46515d" front

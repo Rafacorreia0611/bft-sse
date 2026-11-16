@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/latency_by_docs.properties"
 BENCHMARK_CHECKPOINT_PERIOD=10000000
 # Matches METRICS in summarize.py.
-N_METRICS=8
+N_METRICS=7
 CONFIG_PATH="$DEFAULT_CONFIG"
 CONFIG_DIR=""
 REPLICA_COUNT_OVERRIDE=""

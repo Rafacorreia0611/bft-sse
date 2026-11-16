@@ -27,15 +27,17 @@ public final class KeywordLocationService {
         return keywordNormalizer.normalize(rawKeyword);
     }
 
-    public Integer resolveLocation(SecretKey masterKey, State state, String normalizedKeyword) {
+    public Integer resolveLocation(KeywordLocationMap locationMap, String normalizedKeyword) {
+        if (locationMap == null) {
+            throw new IllegalArgumentException("locationMap cannot be null");
+        }
         if (normalizedKeyword == null || normalizedKeyword.trim().isEmpty()) {
             throw new IllegalArgumentException("normalizedKeyword cannot be null or blank");
         }
-        KeywordLocationMap locationMap = decryptLocationMap(masterKey, state);
         return validateAddress(locationMap.addressOf(normalizedKeyword));
     }
 
-    private KeywordLocationMap decryptLocationMap(SecretKey masterKey, State state) {
+    public KeywordLocationMap decryptLocationMap(SecretKey masterKey, State state) {
         if (masterKey == null || state == null) {
             throw new IllegalArgumentException("masterKey and state cannot be null");
         }

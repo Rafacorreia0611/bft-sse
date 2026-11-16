@@ -9,7 +9,6 @@ package sse.metrics;
 public final class SearchOperationMetrics {
 
     private long normalizationLatencyNanos;
-    private long stateRequestLatencyNanos;
     private long addressResolutionLatencyNanos;
     private long oramReadLatencyNanos;
     private long tokenBuildLatencyNanos;
@@ -23,14 +22,6 @@ public final class SearchOperationMetrics {
 
     public void recordNormalizationLatency(long latencyNanos) {
         normalizationLatencyNanos = latencyNanos;
-    }
-
-    public long stateRequestLatencyNanos() {
-        return stateRequestLatencyNanos;
-    }
-
-    public void recordStateRequestLatency(long latencyNanos) {
-        stateRequestLatencyNanos = latencyNanos;
     }
 
     public long addressResolutionLatencyNanos() {

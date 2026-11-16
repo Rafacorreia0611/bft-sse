@@ -10,7 +10,7 @@ COMMON_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 DATASET_GENERATOR="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_db_size/generate_datasets.py"
 SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_db_size/summarize.py"
 # Matches METRICS in summarize.py.
-N_METRICS=8
+N_METRICS=7
 
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"

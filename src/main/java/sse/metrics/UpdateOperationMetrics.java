@@ -9,7 +9,6 @@ package sse.metrics;
 public final class UpdateOperationMetrics {
 
     private long normalizationLatencyNanos;
-    private long stateRequestLatencyNanos;
     private long addressResolutionLatencyNanos;
     private long oramLockLatencyNanos;
     private int oramLockRetryCount;
@@ -24,14 +23,6 @@ public final class UpdateOperationMetrics {
 
     public void recordNormalizationLatency(long latencyNanos) {
         normalizationLatencyNanos = latencyNanos;
-    }
-
-    public long stateRequestLatencyNanos() {
-        return stateRequestLatencyNanos;
-    }
-
-    public void recordStateRequestLatency(long latencyNanos) {
-        stateRequestLatencyNanos = latencyNanos;
     }
 
     public long addressResolutionLatencyNanos() {

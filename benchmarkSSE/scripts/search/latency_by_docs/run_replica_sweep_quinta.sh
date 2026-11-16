@@ -8,7 +8,7 @@ source "$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/latency_by_docs.properties"
 DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 # Matches METRICS in summarize.py.
-N_METRICS=8
+N_METRICS=7
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
 REPLICA_LIST="4,7,10"

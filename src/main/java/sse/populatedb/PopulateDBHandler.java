@@ -14,7 +14,6 @@ import sse.demo.client.SSEInitCoordinator;
 import sse.domain.state.KeywordBlock;
 import sse.domain.update.KeywordUpdate;
 import sse.domain.update.PreparedUpdateRequest;
-import sse.domain.state.State;
 import sse.domain.update.UpdateOp;
 import sse.facade.SSEClientFacade;
 import sse.oram.ORAMAdapter;
@@ -34,8 +33,6 @@ public final class PopulateDBHandler implements AutoCloseable {
     private final SSEInitCoordinator initCoordinator;
     private final KeywordDocIdsReader datasetReader;
     private final int batchSize;
-    private State currentState;
-    private SecretKey masterKey;
 
     public PopulateDBHandler(ConfidentialClientAdapter adapter) {
         this(adapter, DEFAULT_BATCH_SIZE);
@@ -78,14 +75,13 @@ public final class PopulateDBHandler implements AutoCloseable {
     }
 
     public void initialize() {
-        if (currentState != null && masterKey != null) {
+        if (sseClientFacade.isSessionInitialized()) {
             return;
         }
 
         initCoordinator.initializeOrConnect();
         ConfidentialClientAdapter.StateRequestResult stateRequest = adapter.requestState();
-        currentState = stateRequest.state();
-        masterKey = stateRequest.masterKey();
+        sseClientFacade.initializeSession(stateRequest.masterKey(), stateRequest.state());
     }
 
     public PopulationSummary populate(Path inputPath, int workerIndex, int workerCount) {
@@ -118,15 +114,8 @@ public final class PopulateDBHandler implements AutoCloseable {
                 while (start < docIds.size()) {
                     int end = Math.min(start + batchSize, docIds.size());
                     List<String> batchDocIds = docIds.subList(start, end);
-                    int sentDocIds = sendKeywordBatch(
-                            new KeywordUpdate(
-                                    entry.keyword(),
-                                    batchDocIds,
-                                    UpdateOp.ADD
-                            ),
-                            masterKey,
-                            currentState
-                    );
+                    int sentDocIds = sendKeywordBatch(new KeywordUpdate(
+                            entry.keyword(), batchDocIds, UpdateOp.ADD));
                     processedDocIds += sentDocIds;
                     sentBatches++;
                     start = end;
@@ -160,13 +149,12 @@ public final class PopulateDBHandler implements AutoCloseable {
         }
     }
 
-    private int sendKeywordBatch(KeywordUpdate update,
-                                 SecretKey masterKey, State currentState) {
+    private int sendKeywordBatch(KeywordUpdate update) {
         String normalizedKeyword = sseClientFacade.normalizeKeyword(update.keyword());
         if (normalizedKeyword == null || normalizedKeyword.isEmpty()) {
             throw new IllegalArgumentException("keyword cannot be normalized: " + update.keyword());
         }
-        Integer keywordLocation = sseClientFacade.resolveKeywordLocation(masterKey, currentState, normalizedKeyword);
+        Integer keywordLocation = sseClientFacade.resolveKeywordLocation(normalizedKeyword);
         if (keywordLocation == null) {
             throw new IllegalArgumentException("keyword is outside the vocabulary: " + update.keyword());
         }
@@ -186,7 +174,6 @@ public final class PopulateDBHandler implements AutoCloseable {
             boolean updateCommitted = false;
             try {
                 PreparedUpdateRequest preparedUpdateRequest = sseClientFacade.prepareUpdateRequest(
-                        masterKey,
                         oldBlock.keywordState(),
                         canonicalUpdate
                 );

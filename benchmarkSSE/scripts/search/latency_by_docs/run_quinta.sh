@@ -8,7 +8,7 @@ DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 DEPLOY_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/quinta_deploy.sh"
 COMMON_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/common/quinta_benchmark_common.sh"
 # Matches METRICS in summarize.py.
-N_METRICS=8
+N_METRICS=7
 
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"

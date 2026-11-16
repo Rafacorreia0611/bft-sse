@@ -17,7 +17,6 @@ from typing import Sequence
 METRICS = (
     ("total_latency", "total_latency_ns"),
     ("normalization_latency", "normalization_latency_ns"),
-    ("state_request_latency", "state_request_latency_ns"),
     ("address_resolution_latency", "address_resolution_latency_ns"),
     ("oram_read_latency", "oram_read_latency_ns"),
     ("token_build_latency", "token_build_latency_ns"),

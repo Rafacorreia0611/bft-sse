@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DEFAULT_CONFIG="$ROOT_DIR/benchmarkSSE/config/search/latency_by_docs.properties"
 # Matches METRICS in summarize.py.
-N_METRICS=8
+N_METRICS=7
 CONFIG_PATH="$DEFAULT_CONFIG"
 REPLICA_LIST="4,7,10,13"
 ORAM_REPLICAS_OVERRIDE=""

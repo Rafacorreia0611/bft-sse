@@ -66,7 +66,6 @@ DATASET_CONFIG_COLUMNS = (
 SEARCH_LATENCY_COLUMNS = (
     ("total_latency", "total_latency_ns"),
     ("normalization_latency", "normalization_latency_ns"),
-    ("state_request_latency", "state_request_latency_ns"),
     ("address_resolution_latency", "address_resolution_latency_ns"),
     ("oram_access_latency", "oram_access_latency_ns"),
     ("token_build_latency", "token_build_latency_ns"),
@@ -77,7 +76,6 @@ SEARCH_LATENCY_COLUMNS = (
 UPDATE_LATENCY_COLUMNS = (
     ("total_latency", "total_latency_ns"),
     ("normalization_latency", "normalization_latency_ns"),
-    ("state_request_latency", "state_request_latency_ns"),
     ("address_resolution_latency", "address_resolution_latency_ns"),
     ("oram_access_latency", "oram_access_latency_ns"),
     ("token_build_latency", "token_build_latency_ns"),
@@ -97,7 +95,6 @@ RAW_COLUMNS = (
     "start_offset_ns",
     "total_latency_ns",
     "normalization_latency_ns",
-    "state_request_latency_ns",
     "address_resolution_latency_ns",
     "oram_access_latency_ns",
     "oram_lock_retry_count",

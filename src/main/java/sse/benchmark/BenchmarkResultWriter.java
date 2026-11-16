@@ -34,8 +34,8 @@ public final class BenchmarkResultWriter implements Closeable {
 
     public void writeSearchHeader() throws IOException {
         writer.write("scenario,operation,run,keyword,doc_count,bucket,"
-                + "total_latency_ns,normalization_latency_ns,state_request_latency_ns,"
-                + "address_resolution_latency_ns,oram_read_latency_ns,token_build_latency_ns,"
+                + "total_latency_ns,normalization_latency_ns,address_resolution_latency_ns,"
+                + "oram_read_latency_ns,token_build_latency_ns,"
                 + "search_request_round_trip_latency_ns,result_processing_latency_ns");
         writer.newLine();
     }
@@ -64,8 +64,6 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(',');
         writer.write(Long.toString(metrics.normalizationLatencyNanos()));
         writer.write(',');
-        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
-        writer.write(',');
         writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
         writer.write(',');
         writer.write(Long.toString(metrics.oramReadLatencyNanos()));
@@ -80,8 +78,8 @@ public final class BenchmarkResultWriter implements Closeable {
 
     public void writeUpdateHeader() throws IOException {
         writer.write("scenario,operation,run,keyword,doc_count,expected_db_size_before,"
-                + "total_latency_ns,normalization_latency_ns,state_request_latency_ns,"
-                + "address_resolution_latency_ns,oram_lock_latency_ns,token_build_latency_ns,"
+                + "total_latency_ns,normalization_latency_ns,address_resolution_latency_ns,"
+                + "oram_lock_latency_ns,token_build_latency_ns,"
                 + "update_request_round_trip_latency_ns,oram_publish_latency_ns");
         writer.newLine();
     }
@@ -89,7 +87,7 @@ public final class BenchmarkResultWriter implements Closeable {
     public void writeConcurrentHeader() throws IOException {
         writer.write("scenario,operation,client_count,client_id,client_operation,keyword,"
                 + "updated_document_count,observed_chain_length,start_offset_ns,total_latency_ns,"
-                + "normalization_latency_ns,state_request_latency_ns,address_resolution_latency_ns,"
+                + "normalization_latency_ns,address_resolution_latency_ns,"
                 + "oram_access_latency_ns,oram_lock_retry_count,token_build_latency_ns,"
                 + "request_round_trip_latency_ns,"
                 + "result_processing_latency_ns,oram_publish_latency_ns");
@@ -127,10 +125,6 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(Long.toString(search
                 ? searchMetrics.normalizationLatencyNanos()
                 : updateMetrics.normalizationLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(search
-                ? searchMetrics.stateRequestLatencyNanos()
-                : updateMetrics.stateRequestLatencyNanos()));
         writer.write(',');
         writer.write(Long.toString(search
                 ? searchMetrics.addressResolutionLatencyNanos()
@@ -185,8 +179,6 @@ public final class BenchmarkResultWriter implements Closeable {
         writer.write(Long.toString(totalLatencyNanos));
         writer.write(',');
         writer.write(Long.toString(metrics.normalizationLatencyNanos()));
-        writer.write(',');
-        writer.write(Long.toString(metrics.stateRequestLatencyNanos()));
         writer.write(',');
         writer.write(Long.toString(metrics.addressResolutionLatencyNanos()));
         writer.write(',');

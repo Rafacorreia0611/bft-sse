@@ -9,7 +9,7 @@ DEFAULT_CLUSTER_CONFIG="$ROOT_DIR/benchmarkSSE/config/quinta.env"
 SINGLE_RUNNER="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_db_size/run_quinta.sh"
 AGGREGATE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_db_size/aggregate.py"
 # Matches METRICS in aggregate.py.
-N_METRICS=8
+N_METRICS=7
 
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"

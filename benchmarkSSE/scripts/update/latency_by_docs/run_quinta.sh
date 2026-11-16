@@ -11,7 +11,7 @@ SYNTHETIC_DATASET_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/datasets/synthetic_data
 UPDATE_WORKLOAD_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/generate_workload.py"
 SUMMARIZE_SCRIPT="$ROOT_DIR/benchmarkSSE/scripts/update/latency_by_docs/summarize.py"
 # Matches METRICS in summarize.py.
-N_METRICS=8
+N_METRICS=7
 
 CONFIG_PATH="$DEFAULT_CONFIG"
 CLUSTER_CONFIG="$DEFAULT_CLUSTER_CONFIG"
